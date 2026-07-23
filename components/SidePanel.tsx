@@ -7,11 +7,9 @@ export interface Result {
   sub: string;
 }
 
-export type OnlineState = {
-  role: "host" | "guest";
-  myColor: Color;
-  status: "waiting" | "connected" | "disconnected";
-} | null;
+export type OnlineState =
+  | { role: "host" | "guest"; myColor: Color; status: "waiting" | "connected" | "disconnected" }
+  | null;
 
 interface SidePanelProps {
   mode: "human" | "ai";
@@ -50,13 +48,9 @@ interface SidePanelProps {
 function toggleFullscreen() {
   const el = document.documentElement;
   if (!document.fullscreenElement) {
-    el.requestFullscreen?.().catch(() => {
-      /* ignore */
-    });
+    el.requestFullscreen?.().catch(() => { /* ignore */ });
   } else {
-    document.exitFullscreen?.().catch(() => {
-      /* ignore */
-    });
+    document.exitFullscreen?.().catch(() => { /* ignore */ });
   }
 }
 
@@ -70,33 +64,23 @@ export default function SidePanel(p: SidePanelProps) {
     title = p.result.title;
     sub = p.result.sub;
   } else if (online && online.status !== "connected") {
-    title =
-      online.status === "waiting" ? "Waiting for opponent…" : "Opponent left";
-    sub =
-      online.status === "waiting"
-        ? "Share the invite link to start"
-        : "Start a new game or invite again";
+    title = online.status === "waiting" ? "Waiting for opponent…" : "Opponent left";
+    sub = online.status === "waiting" ? "Share the invite link to start" : "Start a new game or invite again";
   } else {
     const yourMove = online ? online.myColor === p.turn : true;
     title = `${side} to move${p.inCheck ? " — check!" : ""}`;
     sub = p.thinking
       ? "Computer is thinking…"
       : online
-        ? yourMove
-          ? "Your move"
-          : "Opponent's move"
-        : p.inCheck
-          ? "Get your king to safety"
-          : "Tap or drag a piece to move";
+      ? yourMove ? "Your move" : "Opponent's move"
+      : p.inCheck
+      ? "Get your king to safety"
+      : "Tap or drag a piece to move";
   }
 
   const rows: { n: number; w: string; b: string }[] = [];
   for (let i = 0; i < p.history.length; i += 2) {
-    rows.push({
-      n: i / 2 + 1,
-      w: p.history[i]?.san ?? "",
-      b: p.history[i + 1]?.san ?? "",
-    });
+    rows.push({ n: i / 2 + 1, w: p.history[i]?.san ?? "", b: p.history[i + 1]?.san ?? "" });
   }
 
   return (
@@ -120,8 +104,7 @@ export default function SidePanel(p: SidePanelProps) {
           <span className="live-dot" />
           <span>
             {online.status === "waiting" && "Waiting for your friend to join…"}
-            {online.status === "connected" &&
-              `Live — you are ${online.myColor === "w" ? "White" : "Black"}`}
+            {online.status === "connected" && `Live — you are ${online.myColor === "w" ? "White" : "Black"}`}
             {online.status === "disconnected" && "Opponent disconnected"}
           </span>
           <button onClick={p.onLeaveOnline}>Leave</button>
@@ -130,18 +113,10 @@ export default function SidePanel(p: SidePanelProps) {
 
       {!online && (
         <div className="tabs" role="tablist">
-          <button
-            className={p.mode === "human" ? "on" : ""}
-            onClick={() => p.onMode("human")}
-            role="tab"
-          >
+          <button className={p.mode === "human" ? "on" : ""} onClick={() => p.onMode("human")} role="tab">
             Two players
           </button>
-          <button
-            className={p.mode === "ai" ? "on" : ""}
-            onClick={() => p.onMode("ai")}
-            role="tab"
-          >
+          <button className={p.mode === "ai" ? "on" : ""} onClick={() => p.onMode("ai")} role="tab">
             Vs computer
           </button>
         </div>
@@ -152,41 +127,16 @@ export default function SidePanel(p: SidePanelProps) {
           <div className="row">
             <span className="lbl">You play</span>
             <div className="seg">
-              <button
-                className={p.youPlay === "w" ? "on" : ""}
-                onClick={() => p.onSide("w")}
-              >
-                White
-              </button>
-              <button
-                className={p.youPlay === "b" ? "on" : ""}
-                onClick={() => p.onSide("b")}
-              >
-                Black
-              </button>
+              <button className={p.youPlay === "w" ? "on" : ""} onClick={() => p.onSide("w")}>White</button>
+              <button className={p.youPlay === "b" ? "on" : ""} onClick={() => p.onSide("b")}>Black</button>
             </div>
           </div>
           <div className="row">
             <span className="lbl">Strength</span>
             <div className="seg">
-              <button
-                className={p.difficulty === 1 ? "on" : ""}
-                onClick={() => p.onDifficulty(1)}
-              >
-                Easy
-              </button>
-              <button
-                className={p.difficulty === 2 ? "on" : ""}
-                onClick={() => p.onDifficulty(2)}
-              >
-                Medium
-              </button>
-              <button
-                className={p.difficulty === 3 ? "on" : ""}
-                onClick={() => p.onDifficulty(3)}
-              >
-                Hard
-              </button>
+              <button className={p.difficulty === 1 ? "on" : ""} onClick={() => p.onDifficulty(1)}>Easy</button>
+              <button className={p.difficulty === 2 ? "on" : ""} onClick={() => p.onDifficulty(2)}>Medium</button>
+              <button className={p.difficulty === 3 ? "on" : ""} onClick={() => p.onDifficulty(3)}>Hard</button>
             </div>
           </div>
         </div>
@@ -203,17 +153,13 @@ export default function SidePanel(p: SidePanelProps) {
       <div className="captured">
         <div className="cap-row">
           {p.capturedByBlack.map((k, i) => (
-            <span className="pc" key={i}>
-              {GLYPH[k]}
-            </span>
+            <span className="pc" key={i}>{GLYPH[k]}</span>
           ))}
           {p.advantage < 0 && <span className="adv">+{-p.advantage}</span>}
         </div>
         <div className="cap-row">
           {p.capturedByWhite.map((k, i) => (
-            <span className="pc" key={i}>
-              {GLYPH[k]}
-            </span>
+            <span className="pc" key={i}>{GLYPH[k]}</span>
           ))}
           {p.advantage > 0 && <span className="adv">+{p.advantage}</span>}
         </div>
@@ -234,23 +180,10 @@ export default function SidePanel(p: SidePanelProps) {
       </div>
 
       <div className="actions">
-        <button className="primary wide" onClick={p.onNew}>
-          New game
-        </button>
+        <button className="primary wide" onClick={p.onNew}>New game</button>
         <button onClick={p.onFlip}>Flip board</button>
-        <button onClick={p.onUndo} disabled={!!online}>
-          Undo
-        </button>
-        {!online && (
-          <button className="wide" onClick={p.onInvite}>
-            👥 Invite a friend (live)
-          </button>
-        )}
-        {!online && (
-          <button className="wide" onClick={p.onShare}>
-            🔗 Copy snapshot link
-          </button>
-        )}
+        <button onClick={p.onUndo} disabled={!!online}>Undo</button>
+        {!online && <button className="wide invite" onClick={p.onInvite}>👥 Play live with a friend</button>}
         <button onClick={toggleFullscreen}>⛶ Fullscreen</button>
         <button aria-pressed={p.soundOn} onClick={p.onToggleSound}>
           {p.soundOn ? "🔊 Sound" : "🔇 Muted"}
