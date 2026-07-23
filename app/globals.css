@@ -276,3 +276,46 @@ body {
 /* live invite button */
 .actions button.invite { background: #3f7d47; border-color: transparent; color: #eaf6ea; }
 .actions button.invite:hover { background: #3f7d47; border-color: transparent; filter: brightness(1.1); }
+
+/* player tags (whose-turn indicator) */
+.board-stack { width: 100%; max-width: min(72vh, 600px); display: flex; flex-direction: column; gap: 8px; margin: 0 auto; }
+.board-stack .board-wrap { max-width: 100%; }
+.player {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 12px; border-radius: 9px;
+  background: var(--panel); border: 1px solid transparent;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.player.active { color: var(--text); border-color: var(--gold); background: var(--panel-2); }
+.player .pname { flex: 1; }
+.player .tomove { font-size: 12px; font-weight: 700; color: var(--gold); letter-spacing: .3px; }
+
+/* language toggle (top right) */
+.lang-toggle {
+  position: fixed; top: 14px; right: 14px; z-index: 70;
+  display: flex; gap: 3px; padding: 3px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.3);
+}
+.lang-toggle button {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+}
+.lang-toggle button.on { background: var(--gold); color: #241f18; }
+
+/* rematch prompt */
+.banner.rematch { flex-direction: column; align-items: stretch; gap: 8px; }
+.banner.rematch .rematch-btns { display: flex; gap: 8px; }
+.banner.rematch .rematch-btns button { flex: 1; padding: 7px; }
+.banner.rematch .rematch-btns button.ok { background: #3f7d47; color: #eaf6ea; }
+
+/* bigger board in fullscreen */
+:fullscreen .board-stack { max-width: min(90vh, 860px); }
+:-webkit-full-screen .board-stack { max-width: min(90vh, 860px); }
+:fullscreen .app, :-webkit-full-screen .app { max-width: none; }
+
+@media (max-width: 760px) {
+  .board-stack { max-width: min(96vw, 520px); }
+  .lang-toggle { top: 8px; right: 8px; }
+}

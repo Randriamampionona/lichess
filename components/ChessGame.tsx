@@ -5,8 +5,9 @@ import type { MqttClient } from "mqtt";
 import { Chess, Move, Color, BoardT, PieceType, isW, toSAN, encodeMoves, decodeGame } from "@/lib/engine";
 import { bestMove } from "@/lib/ai";
 import { playMoveSound, tick } from "@/lib/sound";
+import { Lang, tr } from "@/lib/i18n";
 import Board from "@/components/Board";
-import SidePanel, { Result, OnlineState } from "@/components/SidePanel";
+import SidePanel, { GameResult, OnlineState } from "@/components/SidePanel";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
@@ -15,17 +16,23 @@ const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
 const BROKER = "wss://broker.emqx.io:8084/mqtt";
 const TOPIC = (room: string) => `chessnext/v1/${room}`;
 
+type Rematch = "none" | "sent" | "received";
+
 type Msg =
   | { t: "join"; s: string }
   | { t: "state"; s: string; moves: Move[] }
   | { t: "move"; s: string; move: Move }
-  | { t: "reset"; s: string };
+  | { t: "rematch"; s: string }
+  | { t: "rematch-accept"; s: string }
+  | { t: "rematch-decline"; s: string };
 
 type Outgoing =
   | { t: "join" }
   | { t: "state"; moves: Move[] }
   | { t: "move"; move: Move }
-  | { t: "reset" };
+  | { t: "rematch" }
+  | { t: "rematch-accept" }
+  | { t: "rematch-decline" };
 
 function snapshot(g: Chess): BoardT {
   return g.board.map((r) => r.slice());
@@ -65,6 +72,8 @@ export default function ChessGame() {
   const applyingRemote = useRef(false);
   const historyRef = useRef<{ san: string; move: Move }[]>([]);
   const onlineRef = useRef<OnlineState>(null);
+  const rematchRef = useRef<Rematch>("none");
+  const langRef = useRef<Lang>("en");
 
   const [position, setPosition] = useState<BoardT>(() => snapshot(engineRef.current));
   const [turn, setTurn] = useState<Color>("w");
@@ -72,7 +81,7 @@ export default function ChessGame() {
   const [checkSquare, setCheckSquare] = useState<[number, number] | null>(null);
   const [history, setHistory] = useState<{ san: string; move: Move }[]>([]);
   const [gameOver, setGameOver] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
+  const [result, setResult] = useState<GameResult | null>(null);
 
   const [mode, setMode] = useState<"human" | "ai">("human");
   const [aiSide, setAiSide] = useState<Color>("b");
@@ -83,9 +92,20 @@ export default function ChessGame() {
   const [locked, setLocked] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [online, setOnline] = useState<OnlineState>(null);
+  const [rematch, setRematch] = useState<Rematch>("none");
+  const [lang, setLang] = useState<Lang>("en");
 
   useEffect(() => { historyRef.current = history; }, [history]);
   useEffect(() => { onlineRef.current = online; }, [online]);
+  useEffect(() => { rematchRef.current = rematch; }, [rematch]);
+  useEffect(() => { langRef.current = lang; }, [lang]);
+
+  // language persistence
+  useEffect(() => {
+    const saved = window.localStorage.getItem("chess-lang");
+    if (saved === "fr" || saved === "en") setLang(saved);
+  }, []);
+  useEffect(() => { window.localStorage.setItem("chess-lang", lang); }, [lang]);
 
   const publish = useCallback((msg: Outgoing) => {
     const c = clientRef.current;
@@ -109,14 +129,14 @@ export default function ChessGame() {
     const g = engineRef.current;
     const legal = g.legalMoves(g.turn);
     if (legal.length === 0) {
-      if (g.inCheck(g.turn)) setResult({ title: "Checkmate", sub: (g.turn === "w" ? "Black" : "White") + " wins" });
-      else setResult({ title: "Stalemate", sub: "Draw — no legal moves" });
+      if (g.inCheck(g.turn)) setResult({ kind: "checkmate", winner: g.turn === "w" ? "b" : "w" });
+      else setResult({ kind: "stalemate" });
       setGameOver(true);
       return true;
     }
-    if (g.half >= 100) { setResult({ title: "Draw", sub: "Fifty-move rule" }); setGameOver(true); return true; }
-    if (g.insufficientMaterial()) { setResult({ title: "Draw", sub: "Insufficient material" }); setGameOver(true); return true; }
-    if ((posCountsRef.current[g.key()] ?? 0) >= 3) { setResult({ title: "Draw", sub: "Threefold repetition" }); setGameOver(true); return true; }
+    if (g.half >= 100) { setResult({ kind: "draw", reason: "fifty" }); setGameOver(true); return true; }
+    if (g.insufficientMaterial()) { setResult({ kind: "draw", reason: "insufficient" }); setGameOver(true); return true; }
+    if ((posCountsRef.current[g.key()] ?? 0) >= 3) { setResult({ kind: "draw", reason: "threefold" }); setGameOver(true); return true; }
     return false;
   }, []);
 
@@ -173,6 +193,7 @@ export default function ChessGame() {
 
     setMode("human");
     setLocked(false);
+    setRematch("none");
     resetTo([]);
     setOrientation(role === "host" ? "w" : "b");
     setOnline({ role, myColor: role === "host" ? "w" : "b", status: "waiting" });
@@ -194,7 +215,6 @@ export default function ChessGame() {
       try { msg = JSON.parse(new TextDecoder().decode(payload)); } catch { return; }
       if (!msg || msg.s === myId) return;
 
-      // make sure the other side also learns about us (order-independent handshake)
       if (!ackedRef.current) { ackedRef.current = true; publish({ t: "join" }); }
 
       if (msg.t === "join") {
@@ -207,12 +227,24 @@ export default function ChessGame() {
         applyingRemote.current = true;
         makeMove(msg.move);
         applyingRemote.current = false;
-      } else if (msg.t === "reset") {
+      } else if (msg.t === "rematch") {
+        if (rematchRef.current === "sent") { // both wanted it
+          resetTo([]);
+          publish({ t: "rematch-accept" });
+          setRematch("none");
+        } else {
+          setRematch("received");
+        }
+      } else if (msg.t === "rematch-accept") {
         resetTo([]);
+        setRematch("none");
+      } else if (msg.t === "rematch-decline") {
+        setRematch("none");
+        showToast(tr(langRef.current, "declined"));
       }
     });
 
-    client.on("error", () => showToast("Network hiccup — reconnecting…"));
+    client.on("error", () => showToast(tr(langRef.current, "netHiccup")));
   }, [resetTo, makeMove, publish, showToast, myId]);
 
   const startHost = useCallback(async () => {
@@ -222,7 +254,7 @@ export default function ChessGame() {
     window.history.replaceState(null, "", `#live=${room}`);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(url)
-        .then(() => showToast("🔗 Invite link copied — send it to your friend"))
+        .then(() => showToast(tr(langRef.current, "inviteCopied")))
         .catch(() => showToast(url));
     } else {
       showToast(url);
@@ -237,10 +269,10 @@ export default function ChessGame() {
     roomRef.current = "";
     onlineRef.current = null;
     setOnline(null);
+    setRematch("none");
     if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
-  // Load shared/live game from the URL once on first mount.
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
@@ -267,7 +299,6 @@ export default function ChessGame() {
 
   useEffect(() => () => { clientRef.current?.end(true); }, []);
 
-  // Computer plays when it is its turn (never during an online game).
   useEffect(() => {
     if (online || mode !== "ai" || gameOver || locked || turn !== aiSide) return;
     setThinking(true);
@@ -280,16 +311,23 @@ export default function ChessGame() {
   }, [turn, mode, aiSide, gameOver, locked, difficulty, online, makeMove]);
 
   const newGame = useCallback(() => {
-    if (!online && window.location.hash) window.history.replaceState(null, "", window.location.pathname);
+    if (onlineRef.current?.status === "connected") {
+      publish({ t: "rematch" });
+      setRematch("sent");
+      return;
+    }
+    if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
     setLocked(false);
     resetTo([]);
-    if (onlineRef.current?.status === "connected") publish({ t: "reset" });
-  }, [resetTo, online, publish]);
+  }, [resetTo, publish]);
+
+  const acceptRematch = useCallback(() => { publish({ t: "rematch-accept" }); resetTo([]); setRematch("none"); }, [publish, resetTo]);
+  const declineRematch = useCallback(() => { publish({ t: "rematch-decline" }); setRematch("none"); }, [publish]);
 
   const flip = () => setOrientation((o) => (o === "w" ? "b" : "w"));
 
   const undo = useCallback(() => {
-    if (online) return; // disabled during live play to avoid desync
+    if (online) return;
     if (history.length === 0) return;
     const keep = history.slice(0, history.length - 1);
     while (mode === "ai" && keep.length > 0 && (keep.length % 2 === 0 ? "w" : "b") === aiSide) {
@@ -312,19 +350,6 @@ export default function ChessGame() {
       return !s;
     });
   };
-
-  const share = useCallback(() => {
-    const code = encodeMoves(history.map((h) => h.move));
-    const url = `${window.location.origin}${window.location.pathname}#g=${code}`;
-    window.history.replaceState(null, "", `#g=${code}`);
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url)
-        .then(() => showToast("🔗 Snapshot link copied (view-only position)"))
-        .catch(() => showToast(url));
-    } else {
-      showToast(url);
-    }
-  }, [history, showToast]);
 
   const unlock = () => setLocked(false);
 
@@ -362,22 +387,52 @@ export default function ChessGame() {
       : !(mode === "ai" && turn === aiSide));
   const inCheck = checkSquare !== null;
 
+  // player-tag labels
+  const bottomColor: Color = orientation;
+  const topColor: Color = orientation === "w" ? "b" : "w";
+  const labelFor = (c: Color): string => {
+    if (online) return c === online.myColor ? tr(lang, "you") : tr(lang, "opponent");
+    if (mode === "ai") return c === aiSide ? tr(lang, "computer") : tr(lang, "you");
+    return c === "w" ? tr(lang, "white") : tr(lang, "black");
+  };
+  const canShowTurn = !gameOver && !(online && online.status !== "connected");
+  const Tag = ({ c }: { c: Color }) => {
+    const active = canShowTurn && turn === c;
+    return (
+      <div className={"player" + (active ? " active" : "")}>
+        <span className={"turn-dot " + c} />
+        <span className="pname">{labelFor(c)}</span>
+        {active && <span className="tomove">● {tr(lang, "toMove")}</span>}
+      </div>
+    );
+  };
+
   return (
     <div className="app">
+      <div className="lang-toggle">
+        <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>
+        <button className={lang === "fr" ? "on" : ""} onClick={() => setLang("fr")}>FR</button>
+      </div>
+
       <div className="board-area">
-        <Board
-          position={position}
-          orientation={orientation}
-          turn={turn}
-          lastMove={lastMove}
-          checkSquare={checkSquare}
-          interactive={interactive}
-          legalFor={legalFor}
-          onMove={makeMove}
-        />
+        <div className="board-stack">
+          <Tag c={topColor} />
+          <Board
+            position={position}
+            orientation={orientation}
+            turn={turn}
+            lastMove={lastMove}
+            checkSquare={checkSquare}
+            interactive={interactive}
+            legalFor={legalFor}
+            onMove={makeMove}
+          />
+          <Tag c={bottomColor} />
+        </div>
       </div>
 
       <SidePanel
+        lang={lang}
         mode={mode}
         onMode={chooseMode}
         youPlay={aiSide === "w" ? "b" : "w"}
@@ -392,8 +447,11 @@ export default function ChessGame() {
         locked={locked}
         onUnlock={unlock}
         online={online}
+        rematch={rematch}
         onInvite={startHost}
         onLeaveOnline={leaveOnline}
+        onRematchAccept={acceptRematch}
+        onRematchDecline={declineRematch}
         capturedByWhite={capturedByWhite}
         capturedByBlack={capturedByBlack}
         advantage={advantage}
@@ -403,7 +461,6 @@ export default function ChessGame() {
         onNew={newGame}
         onFlip={flip}
         onUndo={undo}
-        onShare={share}
       />
 
       {toast && <div className="toast">{toast}</div>}
