@@ -49,3 +49,9 @@ export function playMoveSound(m: Move, isCheck: boolean, isOver: boolean, enable
 export function tick(enabled: boolean) {
   if (enabled) beep(440, 0.08);
 }
+
+export function playChat(enabled: boolean) {
+  if (!enabled) return;
+  beep(520, 0.06, "sine", 0.09);
+  setTimeout(() => beep(760, 0.07, "sine", 0.08), 55);
+}

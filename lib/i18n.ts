@@ -70,6 +70,10 @@ const en = {
   qOops: "Oops!",
   qThanks: "Thanks!",
   qWp: "Well played!",
+  youWin: "You win! 🎉",
+  youLose: "You lose",
+  close: "Close",
+  rematch: "Rematch",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -144,6 +148,10 @@ const fr: Record<TKey, string> = {
   qOops: "Oups !",
   qThanks: "Merci !",
   qWp: "Bien joué !",
+  youWin: "Vous gagnez ! 🎉",
+  youLose: "Vous perdez",
+  close: "Fermer",
+  rematch: "Revanche",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };

@@ -2,18 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MqttClient } from "mqtt";
-import { Chess, Move, Color, BoardT, PieceType, isW, toSAN, encodeMoves, decodeGame } from "@/lib/engine";
+import { Chess, Move, Color, BoardT, PieceType, isW, toSAN, decodeGame } from "@/lib/engine";
 import { bestMove } from "@/lib/ai";
-import { playMoveSound, tick } from "@/lib/sound";
+import { playMoveSound, playChat, tick } from "@/lib/sound";
 import { Lang, tr } from "@/lib/i18n";
 import Board from "@/components/Board";
-import SidePanel, { GameResult, OnlineState, TcId, ChatMsg } from "@/components/SidePanel";
+import SidePanel, { GameResult, OnlineState, TcId } from "@/components/SidePanel";
+import Chat, { ChatMsg } from "@/components/Chat";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
 
 const BROKER = "wss://broker.emqx.io:8084/mqtt";
 const TOPIC = (room: string) => `chessnext/v1/${room}`;
+const QOS = 1 as const;
 
 const TCS: Record<TcId, { base: number; inc: number } | null> = {
   none: null,
@@ -27,29 +29,29 @@ type Clocks = { w: number; b: number };
 
 type Msg =
   | { t: "join"; s: string }
-  | { t: "state"; s: string; moves: Move[]; tcId: TcId }
-  | { t: "move"; s: string; move: Move; clocks?: Clocks }
+  | { t: "state"; s: string; moves: Move[]; tcId: TcId; clocks?: Clocks }
+  | { t: "move"; s: string; move: Move; ply: number; clocks?: Clocks }
+  | { t: "resync"; s: string }
   | { t: "rematch"; s: string }
   | { t: "rematch-accept"; s: string }
   | { t: "rematch-decline"; s: string }
-  | { t: "chat"; s: string; text: string; quick: boolean }
+  | { t: "chat"; s: string; text: string; quick: boolean; color?: string }
   | { t: "tc"; s: string; tcId: TcId }
   | { t: "flag"; s: string; loser: Color };
 
 type Outgoing =
   | { t: "join" }
-  | { t: "state"; moves: Move[]; tcId: TcId }
-  | { t: "move"; move: Move; clocks?: Clocks }
+  | { t: "state"; moves: Move[]; tcId: TcId; clocks?: Clocks }
+  | { t: "move"; move: Move; ply: number; clocks?: Clocks }
+  | { t: "resync" }
   | { t: "rematch" }
   | { t: "rematch-accept" }
   | { t: "rematch-decline" }
-  | { t: "chat"; text: string; quick: boolean }
+  | { t: "chat"; text: string; quick: boolean; color?: string }
   | { t: "tc"; tcId: TcId }
   | { t: "flag"; loser: Color };
 
-function snapshot(g: Chess): BoardT {
-  return g.board.map((r) => r.slice());
-}
+function snapshot(g: Chess): BoardT { return g.board.map((r) => r.slice()); }
 
 function replayMoves(moves: Move[]): { san: string; move: Move }[] {
   const g = new Chess();
@@ -61,9 +63,7 @@ function replayMoves(moves: Move[]): { san: string; move: Move }[] {
         (mv.promotion ? x.promotion === mv.promotion : true)
     );
     if (!m) break;
-    const before = g.clone();
-    const after = g.clone();
-    after.applyMove(m);
+    const before = g.clone(); const after = g.clone(); after.applyMove(m);
     hist.push({ san: toSAN(before, m, after), move: m });
     g.applyMove(m);
   }
@@ -72,11 +72,7 @@ function replayMoves(moves: Move[]): { san: string; move: Move }[] {
 
 function fmtClock(ms: number): string {
   const s = Math.max(0, ms / 1000);
-  if (s >= 60) {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return m + ":" + String(sec).padStart(2, "0");
-  }
+  if (s >= 60) { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return m + ":" + String(sec).padStart(2, "0"); }
   return s.toFixed(1);
 }
 
@@ -96,8 +92,8 @@ export default function ChessGame() {
   const onlineRef = useRef<OnlineState>(null);
   const rematchRef = useRef<Rematch>("none");
   const langRef = useRef<Lang>("en");
+  const plyRef = useRef(0);
 
-  // clock refs
   const clockRef = useRef<Clocks>({ w: 0, b: 0 });
   const tcIdRef = useRef<TcId>("none");
   const lastTickRef = useRef<number>(0);
@@ -129,6 +125,7 @@ export default function ChessGame() {
   const [clock, setClock] = useState<Clocks>({ w: 0, b: 0 });
   const [score, setScore] = useState<{ w: number; b: number }>({ w: 0, b: 0 });
   const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [showResult, setShowResult] = useState(false);
 
   useEffect(() => { historyRef.current = history; }, [history]);
   useEffect(() => { onlineRef.current = online; }, [online]);
@@ -137,6 +134,7 @@ export default function ChessGame() {
   useEffect(() => { turnRef.current = turn; }, [turn]);
   useEffect(() => { gameOverRef.current = gameOver; }, [gameOver]);
   useEffect(() => { lockedRef.current = locked; }, [locked]);
+  useEffect(() => { if (gameOver) setShowResult(true); }, [gameOver]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("chess-lang");
@@ -146,7 +144,7 @@ export default function ChessGame() {
 
   const publish = useCallback((msg: Outgoing) => {
     const c = clientRef.current;
-    if (c && roomRef.current) c.publish(TOPIC(roomRef.current), JSON.stringify({ ...msg, s: myId }));
+    if (c && roomRef.current) c.publish(TOPIC(roomRef.current), JSON.stringify({ ...msg, s: myId }), { qos: QOS });
   }, [myId]);
 
   const showToast = useCallback((m: string) => {
@@ -186,16 +184,14 @@ export default function ChessGame() {
   const makeMove = useCallback((m: Move) => {
     const g = engineRef.current;
     const mover = g.turn;
-    const before = g.clone();
-    const after = g.clone();
-    after.applyMove(m);
+    const before = g.clone(); const after = g.clone(); after.applyMove(m);
     const san = toSAN(before, m, after);
 
     g.applyMove(m);
+    plyRef.current += 1;
     const k = g.key();
     posCountsRef.current[k] = (posCountsRef.current[k] ?? 0) + 1;
 
-    // increment (only the side that actually moved, on the local generating side)
     const tc = TCS[tcIdRef.current];
     if (tc && !applyingRemote.current) {
       clockRef.current = { ...clockRef.current, [mover]: clockRef.current[mover] + tc.inc };
@@ -211,7 +207,7 @@ export default function ChessGame() {
     playMoveSound(m, !r && g.inCheck(g.turn), !!r, soundRef.current);
 
     if (onlineRef.current?.status === "connected" && !applyingRemote.current) {
-      publish({ t: "move", move: m, clocks: tc ? { ...clockRef.current } : undefined });
+      publish({ t: "move", move: m, ply: plyRef.current, clocks: tc ? { ...clockRef.current } : undefined });
     }
   }, [refreshDerived, evaluateEnd, finish, publish]);
 
@@ -226,6 +222,7 @@ export default function ChessGame() {
       last = { from: item.move.from, to: item.move.to };
     }
     engineRef.current = g;
+    plyRef.current = moves.length;
     const base = TCS[tcIdRef.current]?.base ?? 0;
     clockRef.current = { w: base, b: base };
     lastTickRef.current = performance.now();
@@ -235,6 +232,7 @@ export default function ChessGame() {
     setLastMove(last);
     setGameOver(false);
     setResult(null);
+    setShowResult(false);
     setThinking(false);
     setPosition(snapshot(g));
     setTurn(g.turn);
@@ -247,7 +245,6 @@ export default function ChessGame() {
     if (onlineRef.current?.status === "connected") publish({ t: "flag", loser });
   }, [finish, publish]);
 
-  // clock ticking
   useEffect(() => {
     lastTickRef.current = performance.now();
     const id = setInterval(() => {
@@ -268,7 +265,6 @@ export default function ChessGame() {
     return () => clearInterval(id);
   }, [flagTimeout]);
 
-  // when the time control changes (only possible when not in progress), reset clocks
   useEffect(() => {
     tcIdRef.current = tcId;
     const base = TCS[tcId]?.base ?? 0;
@@ -278,7 +274,6 @@ export default function ChessGame() {
     if (onlineRef.current?.role === "host" && onlineRef.current.status === "connected") publish({ t: "tc", tcId });
   }, [tcId, publish]);
 
-  // ---- multiplayer over an MQTT relay ----
   const connectRoom = useCallback(async (room: string, role: "host" | "guest") => {
     const { default: mqtt } = await import("mqtt");
     clientRef.current?.end(true);
@@ -298,7 +293,7 @@ export default function ChessGame() {
     clientRef.current = client;
 
     client.on("connect", () => {
-      client.subscribe(TOPIC(room), () => publish({ t: "join" }));
+      client.subscribe(TOPIC(room), { qos: QOS }, () => publish({ t: "join" }));
     });
 
     client.on("message", (_topic, payload) => {
@@ -309,22 +304,33 @@ export default function ChessGame() {
 
       if (msg.t === "join") {
         setOnline((o) => (o ? { ...o, status: "connected" } : o));
-        if (role === "host") publish({ t: "state", moves: historyRef.current.map((h) => h.move), tcId: tcIdRef.current });
+        if (role === "host") publish({ t: "state", moves: historyRef.current.map((h) => h.move), tcId: tcIdRef.current, clocks: { ...clockRef.current } });
       } else if (msg.t === "state") {
-        if (msg.tcId) setTcId(msg.tcId);
-        resetTo(replayMoves(msg.moves));
+        if (msg.moves.length >= plyRef.current) {
+          if (msg.tcId) setTcId(msg.tcId);
+          resetTo(replayMoves(msg.moves));
+          if (msg.clocks) { clockRef.current = msg.clocks; setClock(msg.clocks); }
+        }
         setOnline((o) => (o ? { ...o, status: "connected" } : o));
       } else if (msg.t === "move") {
-        applyingRemote.current = true;
-        makeMove(msg.move);
-        applyingRemote.current = false;
-        if (msg.clocks) { clockRef.current = msg.clocks; setClock(msg.clocks); }
+        const expected = plyRef.current + 1;
+        if (msg.ply === expected) {
+          applyingRemote.current = true;
+          makeMove(msg.move);
+          applyingRemote.current = false;
+          if (msg.clocks) { clockRef.current = msg.clocks; setClock(msg.clocks); }
+        } else if (msg.ply > expected) {
+          publish({ t: "resync" }); // we missed something — pull full state
+        }
+      } else if (msg.t === "resync") {
+        publish({ t: "state", moves: historyRef.current.map((h) => h.move), tcId: tcIdRef.current, clocks: { ...clockRef.current } });
       } else if (msg.t === "tc") {
         setTcId(msg.tcId);
       } else if (msg.t === "flag") {
         finish({ kind: "timeout", winner: msg.loser === "w" ? "b" : "w" });
       } else if (msg.t === "chat") {
-        setChat((c) => [...c, { from: "them", text: msg.text, quick: msg.quick }]);
+        setChat((c) => [...c, { from: "them", text: msg.text, quick: msg.quick, color: msg.color }]);
+        playChat(soundRef.current);
       } else if (msg.t === "rematch") {
         if (rematchRef.current === "sent") { resetTo([]); publish({ t: "rematch-accept" }); setRematch("none"); }
         else setRematch("received");
@@ -343,11 +349,8 @@ export default function ChessGame() {
     await connectRoom(room, "host");
     const url = `${window.location.origin}${window.location.pathname}#live=${room}`;
     window.history.replaceState(null, "", `#live=${room}`);
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url).then(() => showToast(tr(langRef.current, "inviteCopied"))).catch(() => showToast(url));
-    } else {
-      showToast(url);
-    }
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => showToast(tr(langRef.current, "inviteCopied"))).catch(() => showToast(url));
+    else showToast(url);
   }, [connectRoom, showToast]);
 
   const joinGame = useCallback((room: string) => connectRoom(room, "guest"), [connectRoom]);
@@ -375,6 +378,7 @@ export default function ChessGame() {
         engineRef.current = game;
         posCountsRef.current = {};
         posCountsRef.current[game.key()] = 1;
+        plyRef.current = h.length;
         setHistory(h);
         setLastMove(h.length ? { from: h[h.length - 1].move.from, to: h[h.length - 1].move.to } : null);
         setLocked(true);
@@ -423,11 +427,12 @@ export default function ChessGame() {
   const toggleSound = () => setSoundOn((s) => { soundRef.current = !s; if (!s) tick(true); return !s; });
   const unlock = () => setLocked(false);
 
-  const sendChat = useCallback((text: string, quick: boolean) => {
+  const sendChat = useCallback((text: string, quick: boolean, color?: string) => {
     const clean = text.trim().slice(0, 200);
     if (!clean) return;
-    setChat((c) => [...c, { from: "me", text: clean, quick }]);
-    publish({ t: "chat", text: clean, quick });
+    setChat((c) => [...c, { from: "me", text: clean, quick, color }]);
+    publish({ t: "chat", text: clean, quick, color });
+    playChat(soundRef.current);
   }, [publish]);
 
   const legalFor = useCallback((r: number, c: number): Move[] => {
@@ -435,7 +440,6 @@ export default function ChessGame() {
     return g.legalMoves(g.turn).filter((m) => m.from[0] === r && m.from[1] === c);
   }, []);
 
-  // captured pieces + material advantage
   const remain: Record<Color, Partial<Record<PieceType, number>>> = { w: {}, b: {} };
   for (const row of position)
     for (const p of row)
@@ -460,7 +464,6 @@ export default function ChessGame() {
   const inCheck = checkSquare !== null;
   const timed = tcId !== "none";
 
-  // player tags
   const bottomColor: Color = orientation;
   const topColor: Color = orientation === "w" ? "b" : "w";
   const labelFor = (c: Color): string => {
@@ -484,12 +487,35 @@ export default function ChessGame() {
     );
   };
 
+  // result modal view
+  let modalTitle = "";
+  let modalTone = "draw";
+  if (result) {
+    if (result.kind === "draw" || result.kind === "stalemate") { modalTitle = tr(lang, "draw"); modalTone = "draw"; }
+    else {
+      const w = result.winner;
+      const iWin = online ? w === online.myColor : mode === "ai" ? w !== aiSide : null;
+      if (iWin === true) { modalTitle = tr(lang, "youWin"); modalTone = "win"; }
+      else if (iWin === false) { modalTitle = tr(lang, "youLose"); modalTone = "lose"; }
+      else { modalTitle = w === "w" ? tr(lang, "whiteWins") : tr(lang, "blackWins"); modalTone = "win"; }
+    }
+  }
+  let modalSub = "";
+  if (result) {
+    if (result.kind === "checkmate") modalSub = tr(lang, "checkmate");
+    else if (result.kind === "timeout") modalSub = tr(lang, "timesUp");
+    else if (result.kind === "stalemate") modalSub = tr(lang, "stalemateSub");
+    else modalSub = result.reason === "fifty" ? tr(lang, "fifty") : result.reason === "insufficient" ? tr(lang, "insufficient") : tr(lang, "threefold");
+  }
+
   return (
-    <div className="app">
+    <div className={"app" + (online ? " with-chat" : "")}>
       <div className="lang-toggle">
         <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>
         <button className={lang === "fr" ? "on" : ""} onClick={() => setLang("fr")}>FR</button>
       </div>
+
+      {online && <Chat lang={lang} chat={chat} onSend={sendChat} />}
 
       <div className="board-area">
         <div className="board-stack">
@@ -532,8 +558,6 @@ export default function ChessGame() {
         onLeaveOnline={leaveOnline}
         onRematchAccept={acceptRematch}
         onRematchDecline={declineRematch}
-        chat={chat}
-        onSendChat={sendChat}
         capturedByWhite={capturedByWhite}
         capturedByBlack={capturedByBlack}
         advantage={advantage}
@@ -544,6 +568,26 @@ export default function ChessGame() {
         onFlip={flip}
         onUndo={undo}
       />
+
+      {gameOver && showResult && result && (
+        <div className="modal-overlay" onClick={() => setShowResult(false)}>
+          <div className={"modal " + modalTone} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{modalTitle}</div>
+            <div className="modal-sub">{modalSub}</div>
+            <div className="modal-score">
+              <span className="turn-dot w" /> {score.w}
+              <span className="dash">–</span>
+              {score.b} <span className="turn-dot b" />
+            </div>
+            <div className="modal-btns">
+              <button className="primary" onClick={() => { setShowResult(false); newGame(); }}>
+                {online ? tr(lang, "rematch") : tr(lang, "newGame")}
+              </button>
+              <button onClick={() => setShowResult(false)}>{tr(lang, "close")}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

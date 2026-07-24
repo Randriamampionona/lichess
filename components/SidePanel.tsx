@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import { Color, PieceType, GLYPH } from "@/lib/engine";
 import { Lang, tr, TKey } from "@/lib/i18n";
 
@@ -15,7 +14,6 @@ export type OnlineState =
   | null;
 
 export type TcId = "none" | "3+2" | "5+0" | "10+0";
-export type ChatMsg = { from: "me" | "them"; text: string; quick: boolean };
 
 type Rematch = "none" | "sent" | "received";
 
@@ -45,8 +43,6 @@ interface SidePanelProps {
   onLeaveOnline: () => void;
   onRematchAccept: () => void;
   onRematchDecline: () => void;
-  chat: ChatMsg[];
-  onSendChat: (text: string, quick: boolean) => void;
 
   capturedByWhite: PieceType[];
   capturedByBlack: PieceType[];
@@ -77,11 +73,6 @@ function toggleFullscreen() {
 export default function SidePanel(p: SidePanelProps) {
   const t = (k: TKey) => tr(p.lang, k);
   const online = p.online;
-  const [msg, setMsg] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ block: "nearest" }); }, [p.chat.length]);
-
   const tcDisabled = p.settingsLocked || (!!online && online.role === "guest");
 
   let title: string;
@@ -103,10 +94,6 @@ export default function SidePanel(p: SidePanelProps) {
 
   const rows: { n: number; w: string; b: string }[] = [];
   for (let i = 0; i < p.history.length; i += 2) rows.push({ n: i / 2 + 1, w: p.history[i]?.san ?? "", b: p.history[i + 1]?.san ?? "" });
-
-  const quicks: TKey[] = ["qGg", "qGl", "qNice", "qOops", "qThanks", "qWp"];
-
-  const submitChat = () => { p.onSendChat(msg, false); setMsg(""); };
 
   return (
     <aside className="panel">
@@ -214,32 +201,6 @@ export default function SidePanel(p: SidePanelProps) {
           ))
         )}
       </div>
-
-      {online && (
-        <div className="chat">
-          <div className="chat-log">
-            {p.chat.map((m, i) => (
-              <div key={i} className={"cmsg " + m.from + (m.quick ? " quick" : "")}>{m.text}</div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-          <div className="quicks">
-            {quicks.map((q) => (
-              <button key={q} onClick={() => p.onSendChat(t(q), true)}>{t(q)}</button>
-            ))}
-          </div>
-          <div className="chat-input">
-            <input
-              value={msg}
-              maxLength={200}
-              placeholder={t("chatPlaceholder")}
-              onChange={(e) => setMsg(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") submitChat(); }}
-            />
-            <button onClick={submitChat}>{t("send")}</button>
-          </div>
-        </div>
-      )}
 
       <div className="actions">
         <button className="primary wide" onClick={p.onNew}>{t("newGame")}</button>
