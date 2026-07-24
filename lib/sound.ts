@@ -55,3 +55,16 @@ export function playChat(enabled: boolean) {
   beep(520, 0.06, "sine", 0.09);
   setTimeout(() => beep(760, 0.07, "sine", 0.08), 55);
 }
+
+export function speak(text: string, lang: string, enabled: boolean) {
+  if (!enabled) return;
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    u.rate = 1; u.pitch = 1; u.volume = 1;
+    synth.cancel();
+    synth.speak(u);
+  } catch { /* ignore */ }
+}

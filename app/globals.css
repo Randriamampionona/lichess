@@ -515,3 +515,38 @@ body {
   .modal, .modal-overlay { animation: none; }
   .player .pclock.low { animation: none; }
 }
+
+/* ===== chat: taller + custom scrollbar + nick labels ===== */
+.chat-panel { max-height: min(80vh, 680px); }
+.chat-log { min-height: 260px; scrollbar-width: thin; scrollbar-color: #5a544c transparent; }
+.chat-log::-webkit-scrollbar { width: 8px; }
+.chat-log::-webkit-scrollbar-track { background: transparent; }
+.chat-log::-webkit-scrollbar-thumb { background: #4a453f; border-radius: 8px; border: 2px solid var(--panel); }
+.chat-log::-webkit-scrollbar-thumb:hover { background: #5f584f; }
+.cwrap { display: flex; flex-direction: column; gap: 2px; max-width: 88%; }
+.cwrap.me { align-self: flex-end; align-items: flex-end; }
+.cwrap.them { align-self: flex-start; align-items: flex-start; }
+.cnick { font-size: 10.5px; font-weight: 700; color: var(--muted); padding: 0 6px; letter-spacing: .2px; }
+.cwrap .cmsg { max-width: 100%; }
+
+/* spectator + resign styling */
+.banner.spec { background: rgba(120,140,180,.12); border-color: rgba(120,140,180,.45); color: #b9c4d6; }
+.actions button.resign { background: transparent; border-color: #a5564f; color: #e79a94; }
+.actions button.resign:hover { background: rgba(165,86,79,.15); border-color: #c7645b; }
+
+/* remote cursor */
+.remote-cursor { position: absolute; z-index: 7; pointer-events: none; transform: translate(-3px, -2px); transition: left .07s linear, top .07s linear; }
+.remote-cursor .rc-label {
+  position: absolute; left: 16px; top: 12px; white-space: nowrap;
+  background: #241f18; color: var(--gold); font-size: 10px; font-weight: 800;
+  padding: 2px 7px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.4);
+}
+
+/* nickname input */
+.nick-input {
+  width: 100%; margin: 6px 0 18px; text-align: center; font-size: 18px; font-weight: 700;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 12px; outline: none;
+}
+.nick-input:focus { border-color: var(--gold); }
+.modal-flag { font-size: 48px; margin-bottom: 6px; }

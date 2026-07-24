@@ -38,8 +38,6 @@ const en = {
   sharedViewOnly: "🔒 Shared game — view only",
   playFromHere: "Play from here",
   waitingFriend: "Waiting for your friend to join…",
-  liveWhite: "Live — you are White",
-  liveBlack: "Live — you are Black",
   oppDisconnected: "Opponent disconnected",
   leave: "Leave",
   movesHere: "Moves will appear here",
@@ -70,10 +68,26 @@ const en = {
   qOops: "Oops!",
   qThanks: "Thanks!",
   qWp: "Well played!",
+  qMove: "Move please!",
   youWin: "You win! 🎉",
   youLose: "You lose",
   close: "Close",
   rematch: "Rematch",
+  resignBtn: "🏳️ Resign",
+  raisedFlag: "raised the white flag 🏳️",
+  continuePlaying: "Continue playing",
+  acceptWin: "Accept the win",
+  flagRaised: "🏳️ White flag raised — waiting for opponent…",
+  winByResign: "You win by resignation 🏳️",
+  lostByResign: "You resigned 🏳️",
+  declinedResign: "Opponent wants to keep playing",
+  enterNick: "Choose a nickname",
+  startBtn: "Start",
+  joinBtn: "Join",
+  spectating: "👁 Spectating",
+  specHint: "You're watching — you can chat",
+  leftSuffix: "left the game",
+  okHome: "Back to home",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -116,8 +130,6 @@ const fr: Record<TKey, string> = {
   sharedViewOnly: "🔒 Partie partagée — lecture seule",
   playFromHere: "Jouer à partir d'ici",
   waitingFriend: "En attente de votre ami…",
-  liveWhite: "En direct — vous jouez les Blancs",
-  liveBlack: "En direct — vous jouez les Noirs",
   oppDisconnected: "Adversaire déconnecté",
   leave: "Quitter",
   movesHere: "Les coups s'afficheront ici",
@@ -148,14 +160,28 @@ const fr: Record<TKey, string> = {
   qOops: "Oups !",
   qThanks: "Merci !",
   qWp: "Bien joué !",
+  qMove: "Joue s'il te plaît !",
   youWin: "Vous gagnez ! 🎉",
   youLose: "Vous perdez",
   close: "Fermer",
   rematch: "Revanche",
+  resignBtn: "🏳️ Abandonner",
+  raisedFlag: "a levé le drapeau blanc 🏳️",
+  continuePlaying: "Continuer à jouer",
+  acceptWin: "Accepter la victoire",
+  flagRaised: "🏳️ Drapeau blanc levé — en attente de l'adversaire…",
+  winByResign: "Victoire par abandon 🏳️",
+  lostByResign: "Vous avez abandonné 🏳️",
+  declinedResign: "L'adversaire veut continuer",
+  enterNick: "Choisissez un pseudo",
+  startBtn: "Commencer",
+  joinBtn: "Rejoindre",
+  spectating: "👁 Spectateur",
+  specHint: "Vous regardez — vous pouvez discuter",
+  leftSuffix: "a quitté la partie",
+  okHome: "Retour à l'accueil",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };
 
-export function tr(lang: Lang, key: TKey): string {
-  return DICT[lang][key];
-}
+export function tr(lang: Lang, key: TKey): string { return DICT[lang][key]; }

@@ -9,12 +9,12 @@ export type GameResult =
   | { kind: "stalemate" }
   | { kind: "draw"; reason: "fifty" | "insufficient" | "threefold" };
 
+export type Role = "w" | "b" | "spec";
 export type OnlineState =
-  | { role: "host" | "guest"; myColor: Color; status: "waiting" | "connected" | "disconnected" }
+  | { role: Role; status: "waiting" | "connected" | "disconnected"; whiteNick: string; blackNick: string | null }
   | null;
 
 export type TcId = "none" | "3+2" | "5+0" | "10+0";
-
 type Rematch = "none" | "sent" | "received";
 
 interface SidePanelProps {
@@ -43,6 +43,7 @@ interface SidePanelProps {
   onLeaveOnline: () => void;
   onRematchAccept: () => void;
   onRematchDecline: () => void;
+  onResign: () => void;
 
   capturedByWhite: PieceType[];
   capturedByBlack: PieceType[];
@@ -58,10 +59,7 @@ interface SidePanelProps {
 }
 
 const TC_LIST: { id: TcId; label: string }[] = [
-  { id: "none", label: "∞" },
-  { id: "3+2", label: "3+2" },
-  { id: "5+0", label: "5+0" },
-  { id: "10+0", label: "10+0" },
+  { id: "none", label: "∞" }, { id: "3+2", label: "3+2" }, { id: "5+0", label: "5+0" }, { id: "10+0", label: "10+0" },
 ];
 
 function toggleFullscreen() {
@@ -73,7 +71,9 @@ function toggleFullscreen() {
 export default function SidePanel(p: SidePanelProps) {
   const t = (k: TKey) => tr(p.lang, k);
   const online = p.online;
-  const tcDisabled = p.settingsLocked || (!!online && online.role === "guest");
+  const isSpec = online?.role === "spec";
+  const isPlayer = !!online && online.role !== "spec";
+  const tcDisabled = p.settingsLocked || (!!online && online.role !== "w");
 
   let title: string;
   let sub: string;
@@ -87,13 +87,18 @@ export default function SidePanel(p: SidePanelProps) {
     title = online.status === "waiting" ? t("waitingOpp") : t("opponentLeft");
     sub = online.status === "waiting" ? t("shareToStart") : t("newOrInvite");
   } else {
-    const yourMove = online ? online.myColor === p.turn : true;
     title = (p.turn === "w" ? t("whiteToMove") : t("blackToMove")) + (p.inCheck ? t("checkSuffix") : "");
-    sub = p.thinking ? t("thinking") : online ? (yourMove ? t("yourMove") : t("opponentMove")) : p.inCheck ? t("getKingSafe") : t("tapToMove");
+    const yourMove = isPlayer ? online!.role === p.turn : true;
+    sub = p.thinking ? t("thinking")
+      : isSpec ? t("specHint")
+      : online ? (yourMove ? t("yourMove") : t("opponentMove"))
+      : p.inCheck ? t("getKingSafe") : t("tapToMove");
   }
 
   const rows: { n: number; w: string; b: string }[] = [];
   for (let i = 0; i < p.history.length; i += 2) rows.push({ n: i / 2 + 1, w: p.history[i]?.san ?? "", b: p.history[i + 1]?.san ?? "" });
+
+  const canResign = isPlayer && online!.status === "connected" && !p.gameOver;
 
   return (
     <aside className="panel">
@@ -112,14 +117,11 @@ export default function SidePanel(p: SidePanelProps) {
       {online && (
         <div className={"banner live " + online.status}>
           <span className="live-dot" />
-          <span>
-            {online.status === "waiting" && t("waitingFriend")}
-            {online.status === "connected" && (online.myColor === "w" ? t("liveWhite") : t("liveBlack"))}
-            {online.status === "disconnected" && t("oppDisconnected")}
-          </span>
+          <span>{online.whiteNick} vs {online.blackNick ?? "…"}</span>
           <button onClick={p.onLeaveOnline}>{t("leave")}</button>
         </div>
       )}
+      {isSpec && <div className="banner spec"><span>{t("spectating")} — {t("specHint")}</span></div>}
 
       {p.rematch === "received" && (
         <div className="banner rematch">
@@ -189,23 +191,20 @@ export default function SidePanel(p: SidePanelProps) {
       </div>
 
       <div className="moves">
-        {rows.length === 0 ? (
-          <div className="empty">{t("movesHere")}</div>
-        ) : (
+        {rows.length === 0 ? (<div className="empty">{t("movesHere")}</div>) : (
           rows.map((r) => (
             <div className="mv" key={r.n}>
-              <span className="n">{r.n}</span>
-              <span className="w">{r.w}</span>
-              <span className="b">{r.b}</span>
+              <span className="n">{r.n}</span><span className="w">{r.w}</span><span className="b">{r.b}</span>
             </div>
           ))
         )}
       </div>
 
       <div className="actions">
-        <button className="primary wide" onClick={p.onNew}>{t("newGame")}</button>
+        <button className="primary wide" disabled={isSpec} onClick={p.onNew}>{t("newGame")}</button>
         <button onClick={p.onFlip}>{t("flip")}</button>
         <button onClick={p.onUndo} disabled={!!online}>{t("undo")}</button>
+        {canResign && <button className="wide resign" onClick={p.onResign}>{t("resignBtn")}</button>}
         {!online && <button className="wide invite" onClick={p.onInvite}>{t("playLive")}</button>}
         <button onClick={toggleFullscreen}>{t("fullscreen")}</button>
         <button aria-pressed={p.soundOn} onClick={p.onToggleSound}>{p.soundOn ? t("sound") : t("muted")}</button>
