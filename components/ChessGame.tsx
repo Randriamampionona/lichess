@@ -7,32 +7,45 @@ import { bestMove } from "@/lib/ai";
 import { playMoveSound, tick } from "@/lib/sound";
 import { Lang, tr } from "@/lib/i18n";
 import Board from "@/components/Board";
-import SidePanel, { GameResult, OnlineState } from "@/components/SidePanel";
+import SidePanel, { GameResult, OnlineState, TcId, ChatMsg } from "@/components/SidePanel";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
 
-// Free public MQTT-over-WebSocket relay: no account, no key, works on any network.
 const BROKER = "wss://broker.emqx.io:8084/mqtt";
 const TOPIC = (room: string) => `chessnext/v1/${room}`;
 
+const TCS: Record<TcId, { base: number; inc: number } | null> = {
+  none: null,
+  "3+2": { base: 180000, inc: 2000 },
+  "5+0": { base: 300000, inc: 0 },
+  "10+0": { base: 600000, inc: 0 },
+};
+
 type Rematch = "none" | "sent" | "received";
+type Clocks = { w: number; b: number };
 
 type Msg =
   | { t: "join"; s: string }
-  | { t: "state"; s: string; moves: Move[] }
-  | { t: "move"; s: string; move: Move }
+  | { t: "state"; s: string; moves: Move[]; tcId: TcId }
+  | { t: "move"; s: string; move: Move; clocks?: Clocks }
   | { t: "rematch"; s: string }
   | { t: "rematch-accept"; s: string }
-  | { t: "rematch-decline"; s: string };
+  | { t: "rematch-decline"; s: string }
+  | { t: "chat"; s: string; text: string; quick: boolean }
+  | { t: "tc"; s: string; tcId: TcId }
+  | { t: "flag"; s: string; loser: Color };
 
 type Outgoing =
   | { t: "join" }
-  | { t: "state"; moves: Move[] }
-  | { t: "move"; move: Move }
+  | { t: "state"; moves: Move[]; tcId: TcId }
+  | { t: "move"; move: Move; clocks?: Clocks }
   | { t: "rematch" }
   | { t: "rematch-accept" }
-  | { t: "rematch-decline" };
+  | { t: "rematch-decline" }
+  | { t: "chat"; text: string; quick: boolean }
+  | { t: "tc"; tcId: TcId }
+  | { t: "flag"; loser: Color };
 
 function snapshot(g: Chess): BoardT {
   return g.board.map((r) => r.slice());
@@ -57,6 +70,16 @@ function replayMoves(moves: Move[]): { san: string; move: Move }[] {
   return hist;
 }
 
+function fmtClock(ms: number): string {
+  const s = Math.max(0, ms / 1000);
+  if (s >= 60) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ":" + String(sec).padStart(2, "0");
+  }
+  return s.toFixed(1);
+}
+
 export default function ChessGame() {
   const engineRef = useRef<Chess>(new Chess());
   const posCountsRef = useRef<Record<string, number>>({});
@@ -64,7 +87,6 @@ export default function ChessGame() {
   const toastTimer = useRef<number | undefined>(undefined);
   const startedRef = useRef(false);
 
-  // multiplayer refs
   const clientRef = useRef<MqttClient | null>(null);
   const roomRef = useRef<string>("");
   const myId = useRef<string>(Math.random().toString(36).slice(2)).current;
@@ -74,6 +96,15 @@ export default function ChessGame() {
   const onlineRef = useRef<OnlineState>(null);
   const rematchRef = useRef<Rematch>("none");
   const langRef = useRef<Lang>("en");
+
+  // clock refs
+  const clockRef = useRef<Clocks>({ w: 0, b: 0 });
+  const tcIdRef = useRef<TcId>("none");
+  const lastTickRef = useRef<number>(0);
+  const countedRef = useRef(false);
+  const turnRef = useRef<Color>("w");
+  const gameOverRef = useRef(false);
+  const lockedRef = useRef(false);
 
   const [position, setPosition] = useState<BoardT>(() => snapshot(engineRef.current));
   const [turn, setTurn] = useState<Color>("w");
@@ -94,13 +125,19 @@ export default function ChessGame() {
   const [online, setOnline] = useState<OnlineState>(null);
   const [rematch, setRematch] = useState<Rematch>("none");
   const [lang, setLang] = useState<Lang>("en");
+  const [tcId, setTcId] = useState<TcId>("none");
+  const [clock, setClock] = useState<Clocks>({ w: 0, b: 0 });
+  const [score, setScore] = useState<{ w: number; b: number }>({ w: 0, b: 0 });
+  const [chat, setChat] = useState<ChatMsg[]>([]);
 
   useEffect(() => { historyRef.current = history; }, [history]);
   useEffect(() => { onlineRef.current = online; }, [online]);
   useEffect(() => { rematchRef.current = rematch; }, [rematch]);
   useEffect(() => { langRef.current = lang; }, [lang]);
+  useEffect(() => { turnRef.current = turn; }, [turn]);
+  useEffect(() => { gameOverRef.current = gameOver; }, [gameOver]);
+  useEffect(() => { lockedRef.current = locked; }, [locked]);
 
-  // language persistence
   useEffect(() => {
     const saved = window.localStorage.getItem("chess-lang");
     if (saved === "fr" || saved === "en") setLang(saved);
@@ -125,23 +162,30 @@ export default function ChessGame() {
     setCheckSquare(g.inCheck(g.turn) ? g.findKing(g.turn) : null);
   }, []);
 
-  const evaluateEnd = useCallback((): boolean => {
+  const finish = useCallback((r: GameResult) => {
+    if (countedRef.current) return;
+    countedRef.current = true;
+    setResult(r);
+    setGameOver(true);
+    if (r.kind === "checkmate" || r.kind === "timeout") {
+      const w = r.winner;
+      setScore((s) => ({ ...s, [w]: s[w] + 1 }));
+    }
+  }, []);
+
+  const evaluateEnd = useCallback((): GameResult | null => {
     const g = engineRef.current;
     const legal = g.legalMoves(g.turn);
-    if (legal.length === 0) {
-      if (g.inCheck(g.turn)) setResult({ kind: "checkmate", winner: g.turn === "w" ? "b" : "w" });
-      else setResult({ kind: "stalemate" });
-      setGameOver(true);
-      return true;
-    }
-    if (g.half >= 100) { setResult({ kind: "draw", reason: "fifty" }); setGameOver(true); return true; }
-    if (g.insufficientMaterial()) { setResult({ kind: "draw", reason: "insufficient" }); setGameOver(true); return true; }
-    if ((posCountsRef.current[g.key()] ?? 0) >= 3) { setResult({ kind: "draw", reason: "threefold" }); setGameOver(true); return true; }
-    return false;
+    if (legal.length === 0) return g.inCheck(g.turn) ? { kind: "checkmate", winner: g.turn === "w" ? "b" : "w" } : { kind: "stalemate" };
+    if (g.half >= 100) return { kind: "draw", reason: "fifty" };
+    if (g.insufficientMaterial()) return { kind: "draw", reason: "insufficient" };
+    if ((posCountsRef.current[g.key()] ?? 0) >= 3) return { kind: "draw", reason: "threefold" };
+    return null;
   }, []);
 
   const makeMove = useCallback((m: Move) => {
     const g = engineRef.current;
+    const mover = g.turn;
     const before = g.clone();
     const after = g.clone();
     after.applyMove(m);
@@ -151,17 +195,25 @@ export default function ChessGame() {
     const k = g.key();
     posCountsRef.current[k] = (posCountsRef.current[k] ?? 0) + 1;
 
+    // increment (only the side that actually moved, on the local generating side)
+    const tc = TCS[tcIdRef.current];
+    if (tc && !applyingRemote.current) {
+      clockRef.current = { ...clockRef.current, [mover]: clockRef.current[mover] + tc.inc };
+      setClock(clockRef.current);
+    }
+
     setHistory((h) => [...h, { san, move: m }]);
     setLastMove({ from: m.from, to: m.to });
     refreshDerived();
 
-    const over = evaluateEnd();
-    playMoveSound(m, !over && g.inCheck(g.turn), over, soundRef.current);
+    const r = evaluateEnd();
+    if (r) finish(r);
+    playMoveSound(m, !r && g.inCheck(g.turn), !!r, soundRef.current);
 
     if (onlineRef.current?.status === "connected" && !applyingRemote.current) {
-      publish({ t: "move", move: m });
+      publish({ t: "move", move: m, clocks: tc ? { ...clockRef.current } : undefined });
     }
-  }, [refreshDerived, evaluateEnd, publish]);
+  }, [refreshDerived, evaluateEnd, finish, publish]);
 
   const resetTo = useCallback((moves: { san: string; move: Move }[]) => {
     const g = new Chess();
@@ -174,6 +226,11 @@ export default function ChessGame() {
       last = { from: item.move.from, to: item.move.to };
     }
     engineRef.current = g;
+    const base = TCS[tcIdRef.current]?.base ?? 0;
+    clockRef.current = { w: base, b: base };
+    lastTickRef.current = performance.now();
+    countedRef.current = false;
+    setClock({ w: base, b: base });
     setHistory(moves);
     setLastMove(last);
     setGameOver(false);
@@ -183,6 +240,43 @@ export default function ChessGame() {
     setTurn(g.turn);
     setCheckSquare(g.inCheck(g.turn) ? g.findKing(g.turn) : null);
   }, []);
+
+  const flagTimeout = useCallback((loser: Color) => {
+    if (countedRef.current) return;
+    finish({ kind: "timeout", winner: loser === "w" ? "b" : "w" });
+    if (onlineRef.current?.status === "connected") publish({ t: "flag", loser });
+  }, [finish, publish]);
+
+  // clock ticking
+  useEffect(() => {
+    lastTickRef.current = performance.now();
+    const id = setInterval(() => {
+      const now = performance.now();
+      const dt = now - lastTickRef.current;
+      lastTickRef.current = now;
+      const tc = TCS[tcIdRef.current];
+      if (!tc) return;
+      if (gameOverRef.current || lockedRef.current) return;
+      if (onlineRef.current && onlineRef.current.status !== "connected") return;
+      const side = turnRef.current;
+      const next = { ...clockRef.current };
+      next[side] = Math.max(0, next[side] - dt);
+      clockRef.current = next;
+      setClock(next);
+      if (next[side] <= 0) flagTimeout(side);
+    }, 200);
+    return () => clearInterval(id);
+  }, [flagTimeout]);
+
+  // when the time control changes (only possible when not in progress), reset clocks
+  useEffect(() => {
+    tcIdRef.current = tcId;
+    const base = TCS[tcId]?.base ?? 0;
+    clockRef.current = { w: base, b: base };
+    lastTickRef.current = performance.now();
+    setClock({ w: base, b: base });
+    if (onlineRef.current?.role === "host" && onlineRef.current.status === "connected") publish({ t: "tc", tcId });
+  }, [tcId, publish]);
 
   // ---- multiplayer over an MQTT relay ----
   const connectRoom = useCallback(async (room: string, role: "host" | "guest") => {
@@ -194,16 +288,13 @@ export default function ChessGame() {
     setMode("human");
     setLocked(false);
     setRematch("none");
+    setChat([]);
+    setScore({ w: 0, b: 0 });
     resetTo([]);
     setOrientation(role === "host" ? "w" : "b");
     setOnline({ role, myColor: role === "host" ? "w" : "b", status: "waiting" });
 
-    const client = mqtt.connect(BROKER, {
-      clientId: "chess_" + myId,
-      keepalive: 30,
-      clean: true,
-      reconnectPeriod: 2000,
-    });
+    const client = mqtt.connect(BROKER, { clientId: "chess_" + myId, keepalive: 30, clean: true, reconnectPeriod: 2000 });
     clientRef.current = client;
 
     client.on("connect", () => {
@@ -214,38 +305,38 @@ export default function ChessGame() {
       let msg: Msg;
       try { msg = JSON.parse(new TextDecoder().decode(payload)); } catch { return; }
       if (!msg || msg.s === myId) return;
-
       if (!ackedRef.current) { ackedRef.current = true; publish({ t: "join" }); }
 
       if (msg.t === "join") {
         setOnline((o) => (o ? { ...o, status: "connected" } : o));
-        if (role === "host") publish({ t: "state", moves: historyRef.current.map((h) => h.move) });
+        if (role === "host") publish({ t: "state", moves: historyRef.current.map((h) => h.move), tcId: tcIdRef.current });
       } else if (msg.t === "state") {
+        if (msg.tcId) setTcId(msg.tcId);
         resetTo(replayMoves(msg.moves));
         setOnline((o) => (o ? { ...o, status: "connected" } : o));
       } else if (msg.t === "move") {
         applyingRemote.current = true;
         makeMove(msg.move);
         applyingRemote.current = false;
+        if (msg.clocks) { clockRef.current = msg.clocks; setClock(msg.clocks); }
+      } else if (msg.t === "tc") {
+        setTcId(msg.tcId);
+      } else if (msg.t === "flag") {
+        finish({ kind: "timeout", winner: msg.loser === "w" ? "b" : "w" });
+      } else if (msg.t === "chat") {
+        setChat((c) => [...c, { from: "them", text: msg.text, quick: msg.quick }]);
       } else if (msg.t === "rematch") {
-        if (rematchRef.current === "sent") { // both wanted it
-          resetTo([]);
-          publish({ t: "rematch-accept" });
-          setRematch("none");
-        } else {
-          setRematch("received");
-        }
+        if (rematchRef.current === "sent") { resetTo([]); publish({ t: "rematch-accept" }); setRematch("none"); }
+        else setRematch("received");
       } else if (msg.t === "rematch-accept") {
-        resetTo([]);
-        setRematch("none");
+        resetTo([]); setRematch("none");
       } else if (msg.t === "rematch-decline") {
-        setRematch("none");
-        showToast(tr(langRef.current, "declined"));
+        setRematch("none"); showToast(tr(langRef.current, "declined"));
       }
     });
 
     client.on("error", () => showToast(tr(langRef.current, "netHiccup")));
-  }, [resetTo, makeMove, publish, showToast, myId]);
+  }, [resetTo, makeMove, publish, showToast, finish, myId]);
 
   const startHost = useCallback(async () => {
     const room = Math.random().toString(36).slice(2, 8);
@@ -253,9 +344,7 @@ export default function ChessGame() {
     const url = `${window.location.origin}${window.location.pathname}#live=${room}`;
     window.history.replaceState(null, "", `#live=${room}`);
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url)
-        .then(() => showToast(tr(langRef.current, "inviteCopied")))
-        .catch(() => showToast(url));
+      navigator.clipboard.writeText(url).then(() => showToast(tr(langRef.current, "inviteCopied"))).catch(() => showToast(url));
     } else {
       showToast(url);
     }
@@ -270,6 +359,8 @@ export default function ChessGame() {
     onlineRef.current = null;
     setOnline(null);
     setRematch("none");
+    setChat([]);
+    setScore({ w: 0, b: 0 });
     if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
@@ -277,10 +368,7 @@ export default function ChessGame() {
     if (startedRef.current) return;
     startedRef.current = true;
     const hash = window.location.hash;
-    if (hash.startsWith("#live=")) {
-      joinGame(hash.slice(6));
-      return;
-    }
+    if (hash.startsWith("#live=")) { joinGame(hash.slice(6)); return; }
     if (hash.startsWith("#g=")) {
       try {
         const { game, history: h } = decodeGame(decodeURIComponent(hash.slice(3)));
@@ -311,11 +399,7 @@ export default function ChessGame() {
   }, [turn, mode, aiSide, gameOver, locked, difficulty, online, makeMove]);
 
   const newGame = useCallback(() => {
-    if (onlineRef.current?.status === "connected") {
-      publish({ t: "rematch" });
-      setRematch("sent");
-      return;
-    }
+    if (onlineRef.current?.status === "connected") { publish({ t: "rematch" }); setRematch("sent"); return; }
     if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
     setLocked(false);
     resetTo([]);
@@ -330,28 +414,21 @@ export default function ChessGame() {
     if (online) return;
     if (history.length === 0) return;
     const keep = history.slice(0, history.length - 1);
-    while (mode === "ai" && keep.length > 0 && (keep.length % 2 === 0 ? "w" : "b") === aiSide) {
-      keep.pop();
-    }
+    while (mode === "ai" && keep.length > 0 && (keep.length % 2 === 0 ? "w" : "b") === aiSide) keep.pop();
     resetTo(keep);
   }, [history, mode, aiSide, resetTo, online]);
 
-  const chooseMode = (m: "human" | "ai") => { leaveOnline(); setMode(m); setLocked(false); resetTo([]); };
-  const chooseSide = (you: Color) => {
-    setAiSide(you === "w" ? "b" : "w");
-    setOrientation(you);
-    setLocked(false);
-    resetTo([]);
-  };
-  const toggleSound = () => {
-    setSoundOn((s) => {
-      soundRef.current = !s;
-      if (!s) tick(true);
-      return !s;
-    });
-  };
-
+  const chooseMode = (m: "human" | "ai") => { leaveOnline(); setMode(m); setLocked(false); setScore({ w: 0, b: 0 }); resetTo([]); };
+  const chooseSide = (you: Color) => { setAiSide(you === "w" ? "b" : "w"); setOrientation(you); setLocked(false); setScore({ w: 0, b: 0 }); resetTo([]); };
+  const toggleSound = () => setSoundOn((s) => { soundRef.current = !s; if (!s) tick(true); return !s; });
   const unlock = () => setLocked(false);
+
+  const sendChat = useCallback((text: string, quick: boolean) => {
+    const clean = text.trim().slice(0, 200);
+    if (!clean) return;
+    setChat((c) => [...c, { from: "me", text: clean, quick }]);
+    publish({ t: "chat", text: clean, quick });
+  }, [publish]);
 
   const legalFor = useCallback((r: number, c: number): Move[] => {
     const g = engineRef.current;
@@ -362,11 +439,7 @@ export default function ChessGame() {
   const remain: Record<Color, Partial<Record<PieceType, number>>> = { w: {}, b: {} };
   for (const row of position)
     for (const p of row)
-      if (p) {
-        const col: Color = isW(p) ? "w" : "b";
-        const t = p.toLowerCase() as PieceType;
-        remain[col][t] = (remain[col][t] ?? 0) + 1;
-      }
+      if (p) { const col: Color = isW(p) ? "w" : "b"; const t = p.toLowerCase() as PieceType; remain[col][t] = (remain[col][t] ?? 0) + 1; }
   const capturedByWhite: PieceType[] = [];
   const capturedByBlack: PieceType[] = [];
   (["q", "r", "b", "n", "p"] as PieceType[]).forEach((k) => {
@@ -380,14 +453,14 @@ export default function ChessGame() {
   (Object.keys(remain.b) as PieceType[]).forEach((k) => (matB += VAL[k] * (remain.b[k] ?? 0)));
   const advantage = matW - matB;
 
+  const inProgress = history.length > 0 && !gameOver;
   const interactive =
     !gameOver && !locked &&
-    (online
-      ? online.status === "connected" && turn === online.myColor
-      : !(mode === "ai" && turn === aiSide));
+    (online ? online.status === "connected" && turn === online.myColor : !(mode === "ai" && turn === aiSide));
   const inCheck = checkSquare !== null;
+  const timed = tcId !== "none";
 
-  // player-tag labels
+  // player tags
   const bottomColor: Color = orientation;
   const topColor: Color = orientation === "w" ? "b" : "w";
   const labelFor = (c: Color): string => {
@@ -398,11 +471,15 @@ export default function ChessGame() {
   const canShowTurn = !gameOver && !(online && online.status !== "connected");
   const Tag = ({ c }: { c: Color }) => {
     const active = canShowTurn && turn === c;
+    const low = timed && clock[c] < 10000;
     return (
       <div className={"player" + (active ? " active" : "")}>
         <span className={"turn-dot " + c} />
         <span className="pname">{labelFor(c)}</span>
-        {active && <span className="tomove">● {tr(lang, "toMove")}</span>}
+        <span className="pscore">{score[c]}</span>
+        {timed
+          ? <span className={"pclock" + (low ? " low" : "") + (active ? " run" : "")}>{fmtClock(clock[c])}</span>
+          : active && <span className="tomove">● {tr(lang, "toMove")}</span>}
       </div>
     );
   };
@@ -439,6 +516,9 @@ export default function ChessGame() {
         onSide={chooseSide}
         difficulty={difficulty}
         onDifficulty={setDifficulty}
+        tcId={tcId}
+        onTcId={setTcId}
+        settingsLocked={inProgress}
         turn={turn}
         inCheck={inCheck}
         thinking={thinking}
@@ -452,6 +532,8 @@ export default function ChessGame() {
         onLeaveOnline={leaveOnline}
         onRematchAccept={acceptRematch}
         onRematchDecline={declineRematch}
+        chat={chat}
+        onSendChat={sendChat}
         capturedByWhite={capturedByWhite}
         capturedByBlack={capturedByBlack}
         advantage={advantage}
