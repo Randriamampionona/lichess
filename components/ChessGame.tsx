@@ -107,6 +107,7 @@ type Msg =
       color?: string;
     }
   | { t: "cursor"; s: string; x: number; y: number; o: Color }
+  | { t: "ping"; s: string; ply: number }
   | { t: "left"; s: string; id: string; explicit?: boolean };
 
 type Outgoing =
@@ -138,6 +139,7 @@ type Outgoing =
       color?: string;
     }
   | { t: "cursor"; x: number; y: number; o: Color }
+  | { t: "ping"; ply: number }
   | { t: "left"; id: string; explicit?: boolean };
 
 function snapshot(g: Chess): BoardT {
@@ -532,6 +534,15 @@ export default function ChessGame() {
   }, [flagTimeout]);
 
   useEffect(() => {
+    const id = setInterval(() => {
+      const on = onlineRef.current;
+      if (!on || on.status !== "connected") return;
+      publish({ t: "ping", ply: plyRef.current });
+    }, 2500);
+    return () => clearInterval(id);
+  }, [publish]);
+
+  useEffect(() => {
     tcIdRef.current = tcId;
     const base = TCS[tcId]?.base ?? 0;
     clockRef.current = { w: base, b: base };
@@ -619,6 +630,11 @@ export default function ChessGame() {
           return;
         }
         if (!msg || msg.s === myId) return;
+        if (pendingLeaveIdRef.current && msg.s === pendingLeaveIdRef.current) {
+          clearTimeout(pendingLeaveRef.current);
+          pendingLeaveRef.current = undefined;
+          pendingLeaveIdRef.current = null;
+        }
         if (!ackedRef.current) {
           ackedRef.current = true;
           publish({ t: "join", id: myId, nick: myNickRef.current });
@@ -687,6 +703,16 @@ export default function ChessGame() {
             clocks: { ...clockRef.current },
             score: scoreRef.current,
           });
+        } else if (msg.t === "ping") {
+          if (msg.ply > plyRef.current) publish({ t: "resync" });
+          else if (msg.ply < plyRef.current)
+            publish({
+              t: "state",
+              moves: historyRef.current.map((h) => h.move),
+              tcId: tcIdRef.current,
+              clocks: { ...clockRef.current },
+              score: scoreRef.current,
+            });
         } else if (msg.t === "tc") {
           setTcId(msg.tcId);
         } else if (msg.t === "timeout") {
@@ -766,7 +792,7 @@ export default function ChessGame() {
               pendingLeaveIdRef.current = msg.id;
               if (pendingLeaveRef.current)
                 clearTimeout(pendingLeaveRef.current);
-              pendingLeaveRef.current = window.setTimeout(trigger, 6000);
+              pendingLeaveRef.current = window.setTimeout(trigger, 8000);
             }
           }
         }
