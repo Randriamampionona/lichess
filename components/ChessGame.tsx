@@ -107,6 +107,7 @@ type Msg =
       color?: string;
     }
   | { t: "cursor"; s: string; x: number; y: number; o: Color }
+  | { t: "nick"; s: string; id: string; nick: string }
   | { t: "ping"; s: string; ply: number; key: string }
   | { t: "result"; s: string; result: GameResult }
   | { t: "left"; s: string; id: string; explicit?: boolean };
@@ -140,6 +141,7 @@ type Outgoing =
       color?: string;
     }
   | { t: "cursor"; x: number; y: number; o: Color }
+  | { t: "nick"; id: string; nick: string }
   | { t: "ping"; ply: number; key: string }
   | { t: "result"; result: GameResult }
   | { t: "left"; id: string; explicit?: boolean };
@@ -297,6 +299,8 @@ export default function ChessGame() {
     room: string;
   } | null>(null);
   const [nickInput, setNickInput] = useState("");
+  const [editingNick, setEditingNick] = useState(false);
+  const [nickDraft, setNickDraft] = useState("");
   const [resignIncoming, setResignIncoming] = useState(false);
   const [leftInfo, setLeftInfo] = useState<{ nick: string } | null>(null);
   const [remoteCursor, setRemoteCursor] = useState<{
@@ -793,6 +797,20 @@ export default function ChessGame() {
             () => setRemoteCursor(null),
             2500,
           );
+        } else if (msg.t === "nick") {
+          const r = rosterRef.current;
+          if (r.white.id === msg.id) r.white = { ...r.white, nick: msg.nick };
+          else if (r.black && r.black.id === msg.id)
+            r.black = { ...r.black, nick: msg.nick };
+          setOnline((o) =>
+            o
+              ? {
+                  ...o,
+                  whiteNick: r.white.nick,
+                  blackNick: r.black?.nick ?? null,
+                }
+              : o,
+          );
         } else if (msg.t === "resign") {
           setResignIncoming(true);
         } else if (msg.t === "resign-accept") {
@@ -1083,6 +1101,37 @@ export default function ChessGame() {
     [publish],
   );
 
+  const startEditNick = useCallback(() => {
+    const on = onlineRef.current;
+    if (!on || on.role === "spec") return;
+    setNickDraft(
+      myNickRef.current ||
+        (on.role === "w" ? on.whiteNick : (on.blackNick ?? "")),
+    );
+    setEditingNick(true);
+  }, []);
+  const cancelNick = useCallback(() => setEditingNick(false), []);
+  const commitNick = useCallback(() => {
+    setEditingNick(false);
+    const n = nickDraft.trim().slice(0, 18);
+    if (!n || myRoleRef.current === "spec" || n === myNickRef.current) return;
+    myNickRef.current = n;
+    try {
+      window.localStorage.setItem("chess-nick", n);
+    } catch {
+      /* noop */
+    }
+    const r = rosterRef.current;
+    if (r.white.id === myId) r.white = { ...r.white, nick: n };
+    else if (r.black && r.black.id === myId) r.black = { ...r.black, nick: n };
+    setOnline((o) =>
+      o
+        ? { ...o, whiteNick: r.white.nick, blackNick: r.black?.nick ?? null }
+        : o,
+    );
+    publish({ t: "nick", id: myId, nick: n });
+  }, [nickDraft, publish, myId]);
+
   const legalFor = useCallback((r: number, c: number): Move[] => {
     const g = engineRef.current;
     return g
@@ -1142,10 +1191,32 @@ export default function ChessGame() {
   const Tag = ({ c }: { c: Color }) => {
     const active = canShowTurn && turn === c;
     const low = timed && clock[c] < 10000;
+    const isMe = !!online && online.role === c;
     return (
       <div className={"player" + (active ? " active" : "")}>
         <span className={"turn-dot " + c} />
-        <span className="pname">{labelFor(c)}</span>
+        {isMe && editingNick ? (
+          <input
+            className="pname-edit"
+            value={nickDraft}
+            maxLength={18}
+            autoFocus
+            onChange={(e) => setNickDraft(e.target.value)}
+            onBlur={commitNick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitNick();
+              if (e.key === "Escape") cancelNick();
+            }}
+          />
+        ) : (
+          <span
+            className={"pname" + (isMe ? " editable" : "")}
+            onDoubleClick={isMe ? startEditNick : undefined}
+            title={isMe ? tr(lang, "editNickHint") : undefined}
+          >
+            {labelFor(c)}
+          </span>
+        )}
         <span className="pscore">{score[c]}</span>
         {timed ? (
           <span

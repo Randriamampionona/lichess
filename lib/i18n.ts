@@ -88,6 +88,7 @@ const en = {
   specHint: "You're watching — you can chat",
   leftSuffix: "left the game",
   okHome: "Back to home",
+  editNickHint: "Double-click to edit your name",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -180,8 +181,11 @@ const fr: Record<TKey, string> = {
   specHint: "Vous regardez — vous pouvez discuter",
   leftSuffix: "a quitté la partie",
   okHome: "Retour à l'accueil",
+  editNickHint: "Double-cliquez pour modifier votre nom",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };
 
-export function tr(lang: Lang, key: TKey): string { return DICT[lang][key]; }
+export function tr(lang: Lang, key: TKey): string {
+  return DICT[lang][key];
+}
