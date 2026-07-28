@@ -107,7 +107,8 @@ type Msg =
       color?: string;
     }
   | { t: "cursor"; s: string; x: number; y: number; o: Color }
-  | { t: "ping"; s: string; ply: number }
+  | { t: "ping"; s: string; ply: number; key: string }
+  | { t: "result"; s: string; result: GameResult }
   | { t: "left"; s: string; id: string; explicit?: boolean };
 
 type Outgoing =
@@ -139,7 +140,8 @@ type Outgoing =
       color?: string;
     }
   | { t: "cursor"; x: number; y: number; o: Color }
-  | { t: "ping"; ply: number }
+  | { t: "ping"; ply: number; key: string }
+  | { t: "result"; result: GameResult }
   | { t: "left"; id: string; explicit?: boolean };
 
 function snapshot(g: Chess): BoardT {
@@ -462,15 +464,16 @@ export default function ChessGame() {
 
       if (
         onlineRef.current?.status === "connected" &&
-        myRoleRef.current !== "spec" &&
-        !applyingRemote.current
+        myRoleRef.current !== "spec"
       ) {
-        publish({
-          t: "move",
-          move: m,
-          ply: plyRef.current,
-          clocks: tc ? { ...clockRef.current } : undefined,
-        });
+        if (!applyingRemote.current)
+          publish({
+            t: "move",
+            move: m,
+            ply: plyRef.current,
+            clocks: tc ? { ...clockRef.current } : undefined,
+          });
+        if (r) publish({ t: "result", result: r });
       }
     },
     [refreshDerived, evaluateEnd, finish, publish],
@@ -537,7 +540,7 @@ export default function ChessGame() {
     const id = setInterval(() => {
       const on = onlineRef.current;
       if (!on || on.status !== "connected") return;
-      publish({ t: "ping", ply: plyRef.current });
+      publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
     }, 2500);
     return () => clearInterval(id);
   }, [publish]);
@@ -672,15 +675,25 @@ export default function ChessGame() {
           if (rosterRef.current.white.id !== myId)
             applyRoster({ white: msg.white, black: msg.black });
         } else if (msg.t === "state") {
-          if (rosterRef.current.white.id !== myId && msg.score)
-            setScore(msg.score);
-          if (msg.moves.length > plyRef.current) {
+          const iAmHost = rosterRef.current.white.id === myId;
+          if (!iAmHost && msg.score) setScore(msg.score);
+          let adopt = msg.moves.length > plyRef.current;
+          if (!adopt && !iAmHost && msg.moves.length === plyRef.current) {
+            // same move count — adopt only if the actual position differs (host is source of truth)
+            const g2 = new Chess();
+            const rp = replayMoves(msg.moves);
+            for (const it of rp) g2.applyMove(it.move);
+            adopt = g2.key() !== engineRef.current.key();
+          }
+          if (adopt) {
             if (msg.tcId) setTcId(msg.tcId);
             resetTo(replayMoves(msg.moves));
             if (msg.clocks) {
               clockRef.current = msg.clocks;
               setClock(msg.clocks);
             }
+            const endR = evaluateEnd();
+            if (endR) finish(endR);
           }
         } else if (msg.t === "move") {
           const expected = plyRef.current + 1;
@@ -704,6 +717,7 @@ export default function ChessGame() {
             score: scoreRef.current,
           });
         } else if (msg.t === "ping") {
+          const iAmHost = rosterRef.current.white.id === myId;
           if (msg.ply > plyRef.current) publish({ t: "resync" });
           else if (msg.ply < plyRef.current)
             publish({
@@ -713,10 +727,25 @@ export default function ChessGame() {
               clocks: { ...clockRef.current },
               score: scoreRef.current,
             });
+          else if (msg.key && msg.key !== engineRef.current.key()) {
+            // same move count but different position — host pushes truth, guest pulls it
+            if (iAmHost)
+              publish({
+                t: "state",
+                moves: historyRef.current.map((h) => h.move),
+                tcId: tcIdRef.current,
+                clocks: { ...clockRef.current },
+                score: scoreRef.current,
+              });
+            else publish({ t: "resync" });
+          }
         } else if (msg.t === "tc") {
           setTcId(msg.tcId);
         } else if (msg.t === "timeout") {
           finish({ kind: "timeout", winner: msg.loser === "w" ? "b" : "w" });
+        } else if (msg.t === "result") {
+          finish(msg.result);
+          publish({ t: "resync" });
         } else if (msg.t === "chat") {
           setChat((c) => [
             ...c,
@@ -800,7 +829,16 @@ export default function ChessGame() {
 
       client.on("error", () => showToast(tr(langRef.current, "netHiccup")));
     },
-    [resetTo, makeMove, publish, showToast, finish, applyRoster, myId],
+    [
+      resetTo,
+      makeMove,
+      publish,
+      showToast,
+      finish,
+      evaluateEnd,
+      applyRoster,
+      myId,
+    ],
   );
 
   const confirmNick = useCallback(() => {
