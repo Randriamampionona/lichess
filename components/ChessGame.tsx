@@ -347,7 +347,12 @@ export default function ChessGame() {
     if (gameOver) setShowResult(true);
   }, [gameOver]);
   useEffect(() => {
-    if (nickPrompt) setNickInput(randomNick());
+    if (nickPrompt)
+      setNickInput(
+        (typeof window !== "undefined" &&
+          window.localStorage.getItem("chess-nick")) ||
+          randomNick(),
+      );
   }, [nickPrompt]);
 
   useEffect(() => {
@@ -411,7 +416,11 @@ export default function ChessGame() {
     countedRef.current = true;
     setResult(r);
     setGameOver(true);
-    if (r.kind === "checkmate" || r.kind === "timeout") {
+    if (
+      r.kind === "checkmate" ||
+      r.kind === "timeout" ||
+      r.kind === "abandon"
+    ) {
       const w = r.winner;
       setScore((s) => ({ ...s, [w]: s[w] + 1 }));
     }
@@ -541,7 +550,7 @@ export default function ChessGame() {
       const on = onlineRef.current;
       if (!on || on.status !== "connected") return;
       publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
-    }, 2500);
+    }, 1000);
     return () => clearInterval(id);
   }, [publish]);
 
@@ -813,7 +822,8 @@ export default function ChessGame() {
               r.white.id === msg.id ? r.white.nick : (r.black?.nick ?? "");
             const trigger = () => {
               setOnline((o) => (o ? { ...o, status: "disconnected" } : o));
-              setLeftInfo({ nick });
+              if (myRoleRef.current === "spec") setLeftInfo({ nick });
+              else finish({ kind: "abandon", winner: myRoleRef.current });
             };
             if (msg.explicit) trigger();
             else {
@@ -821,7 +831,7 @@ export default function ChessGame() {
               pendingLeaveIdRef.current = msg.id;
               if (pendingLeaveRef.current)
                 clearTimeout(pendingLeaveRef.current);
-              pendingLeaveRef.current = window.setTimeout(trigger, 8000);
+              pendingLeaveRef.current = window.setTimeout(trigger, 20000);
             }
           }
         }
@@ -845,6 +855,11 @@ export default function ChessGame() {
     const np = nickPrompt;
     if (!np) return;
     const nick = (nickInput.trim() || randomNick()).slice(0, 18);
+    try {
+      window.localStorage.setItem("chess-nick", nick);
+    } catch {
+      /* noop */
+    }
     setNickPrompt(null);
     connectRoom(np.room, np.isHost, nick);
     if (np.isHost) {
@@ -1177,6 +1192,7 @@ export default function ChessGame() {
   if (result) {
     if (result.kind === "checkmate") modalSub = tr(lang, "checkmate");
     else if (result.kind === "timeout") modalSub = tr(lang, "timesUp");
+    else if (result.kind === "abandon") modalSub = tr(lang, "opponentLeft");
     else if (result.kind === "stalemate") modalSub = tr(lang, "stalemateSub");
     else
       modalSub =
@@ -1354,9 +1370,13 @@ export default function ChessGame() {
               >
                 {online ? tr(lang, "rematch") : tr(lang, "newGame")}
               </button>
-              <button onClick={() => setShowResult(false)}>
-                {tr(lang, "close")}
-              </button>
+              {result.kind === "abandon" ? (
+                <button onClick={leaveOnline}>{tr(lang, "leave")}</button>
+              ) : (
+                <button onClick={() => setShowResult(false)}>
+                  {tr(lang, "close")}
+                </button>
+              )}
             </div>
           </div>
         </div>
