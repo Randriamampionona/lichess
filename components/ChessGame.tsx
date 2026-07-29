@@ -977,9 +977,11 @@ export default function ChessGame() {
     setRemoteCursor(null);
     setTakebackIncoming(false);
     setTakebackPending(false);
+    setLeaverNick("");
+    resetTo([]);
     if (window.location.hash)
       window.history.replaceState(null, "", window.location.pathname);
-  }, [publish, myId]);
+  }, [publish, myId, resetTo]);
 
   useEffect(() => {
     if (startedRef.current) return;
