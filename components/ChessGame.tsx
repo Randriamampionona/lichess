@@ -1024,6 +1024,33 @@ export default function ChessGame() {
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
 
+  // allow opening a different invite link in the same tab (hash changes without a reload)
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash;
+      if (!hash.startsWith("#live=")) return;
+      const room = hash.slice(6);
+      if (!room || room === roomRef.current) return;
+      // best-effort notify the room we're currently in, then join the new one as a guest
+      if (clientRef.current && onlineRef.current) {
+        try {
+          publish({ t: "left", id: myId, explicit: true });
+        } catch {
+          /* noop */
+        }
+      }
+      clearSession();
+      const nick =
+        (typeof window !== "undefined" &&
+          window.localStorage.getItem("chess-nick")) ||
+        myNickRef.current ||
+        randomNick();
+      setTimeout(() => connectRoom(room, false, nick), 300);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [publish, myId, connectRoom]);
+
   useEffect(
     () => () => {
       clientRef.current?.end(true);
