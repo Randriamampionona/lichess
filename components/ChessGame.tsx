@@ -92,6 +92,9 @@ type Msg =
   | { t: "tc"; s: string; tcId: TcId }
   | { t: "timeout"; s: string; loser: Color }
   | { t: "rematch"; s: string }
+  | { t: "takeback"; s: string }
+  | { t: "takeback-accept"; s: string }
+  | { t: "takeback-decline"; s: string }
   | { t: "rematch-accept"; s: string }
   | { t: "rematch-decline"; s: string }
   | { t: "resign"; s: string }
@@ -127,6 +130,9 @@ type Outgoing =
   | { t: "tc"; tcId: TcId }
   | { t: "timeout"; loser: Color }
   | { t: "rematch" }
+  | { t: "takeback" }
+  | { t: "takeback-accept" }
+  | { t: "takeback-decline" }
   | { t: "rematch-accept" }
   | { t: "rematch-decline" }
   | { t: "resign" }
@@ -302,6 +308,8 @@ export default function ChessGame() {
   const [editingNick, setEditingNick] = useState(false);
   const [nickDraft, setNickDraft] = useState("");
   const [resignIncoming, setResignIncoming] = useState(false);
+  const [takebackIncoming, setTakebackIncoming] = useState(false);
+  const [takebackPending, setTakebackPending] = useState(false);
   const [leftInfo, setLeftInfo] = useState<{ nick: string } | null>(null);
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
@@ -591,6 +599,8 @@ export default function ChessGame() {
       setResignIncoming(false);
       setLeftInfo(null);
       setRemoteCursor(null);
+      setTakebackIncoming(false);
+      setTakebackPending(false);
       if (restore) {
         tcIdRef.current = restore.tcId;
         setTcId(restore.tcId);
@@ -831,6 +841,14 @@ export default function ChessGame() {
         } else if (msg.t === "rematch-decline") {
           setRematch("none");
           showToast(tr(langRef.current, "declined"));
+        } else if (msg.t === "takeback") {
+          setTakebackIncoming(true);
+        } else if (msg.t === "takeback-accept") {
+          setTakebackPending(false);
+          applyTakeback();
+        } else if (msg.t === "takeback-decline") {
+          setTakebackPending(false);
+          showToast(tr(langRef.current, "takebackDeclined"));
         } else if (msg.t === "left") {
           const r = rosterRef.current;
           const isPlayer =
@@ -918,6 +936,8 @@ export default function ChessGame() {
     setResignIncoming(false);
     setLeftInfo(null);
     setRemoteCursor(null);
+    setTakebackIncoming(false);
+    setTakebackPending(false);
     if (window.location.hash)
       window.history.replaceState(null, "", window.location.pathname);
   }, [publish, myId]);
@@ -1024,11 +1044,44 @@ export default function ChessGame() {
     publish({ t: "resign-decline" });
     setResignIncoming(false);
   }, [publish]);
+  const applyTakeback = useCallback(() => {
+    const moves = historyRef.current;
+    if (moves.length === 0) return;
+    const saved = { ...clockRef.current };
+    resetTo(moves.slice(0, moves.length - 1));
+    clockRef.current = saved;
+    setClock(saved);
+  }, [resetTo]);
+  const requestTakeback = useCallback(() => {
+    const on = onlineRef.current;
+    if (
+      !on ||
+      on.status !== "connected" ||
+      myRoleRef.current === "spec" ||
+      historyRef.current.length === 0
+    )
+      return;
+    setTakebackPending(true);
+    publish({ t: "takeback" });
+    showToast(tr(langRef.current, "takebackSent"));
+  }, [publish, showToast]);
+  const allowTakeback = useCallback(() => {
+    setTakebackIncoming(false);
+    publish({ t: "takeback-accept" });
+    applyTakeback();
+  }, [publish, applyTakeback]);
+  const declineTakeback = useCallback(() => {
+    setTakebackIncoming(false);
+    publish({ t: "takeback-decline" });
+  }, [publish]);
 
   const flip = () => setOrientation((o) => (o === "w" ? "b" : "w"));
 
   const undo = useCallback(() => {
-    if (online) return;
+    if (online) {
+      requestTakeback();
+      return;
+    }
     if (history.length === 0) return;
     const keep = history.slice(0, history.length - 1);
     while (
@@ -1038,7 +1091,7 @@ export default function ChessGame() {
     )
       keep.pop();
     resetTo(keep);
-  }, [history, mode, aiSide, resetTo, online]);
+  }, [history, mode, aiSide, resetTo, online, requestTakeback]);
 
   const chooseMode = (m: "human" | "ai") => {
     leaveOnline();
@@ -1352,6 +1405,7 @@ export default function ChessGame() {
         onNew={newGame}
         onFlip={flip}
         onUndo={undo}
+        takebackPending={takebackPending}
       />
 
       {/* nickname modal */}
@@ -1395,6 +1449,23 @@ export default function ChessGame() {
               <button onClick={declineResign}>
                 {tr(lang, "continuePlaying")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {takebackIncoming && (
+        <div className="modal-overlay">
+          <div className="modal draw">
+            <div className="modal-flag">↶</div>
+            <div className="modal-title" style={{ fontSize: 22 }}>
+              {resignerNick} {tr(lang, "takebackAsks")}
+            </div>
+            <div className="modal-btns">
+              <button className="primary" onClick={allowTakeback}>
+                {tr(lang, "allow")}
+              </button>
+              <button onClick={declineTakeback}>{tr(lang, "decline")}</button>
             </div>
           </div>
         </div>

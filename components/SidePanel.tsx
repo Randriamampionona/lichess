@@ -60,6 +60,7 @@ interface SidePanelProps {
   onNew: () => void;
   onFlip: () => void;
   onUndo: () => void;
+  takebackPending: boolean;
 }
 
 const TC_LIST: { id: TcId; label: string }[] = [
@@ -328,8 +329,18 @@ export default function SidePanel(p: SidePanelProps) {
           {t("newGame")}
         </button>
         <button onClick={p.onFlip}>{t("flip")}</button>
-        <button onClick={p.onUndo} disabled={!!online}>
-          {t("undo")}
+        <button
+          onClick={p.onUndo}
+          disabled={
+            isSpec ||
+            p.history.length === 0 ||
+            (!!online &&
+              (online.status !== "connected" ||
+                p.gameOver ||
+                p.takebackPending))
+          }
+        >
+          {online ? t("takeback") : t("undo")}
         </button>
         {canResign && (
           <button className="wide resign" onClick={p.onResign}>

@@ -89,6 +89,11 @@ const en = {
   leftSuffix: "left the game",
   okHome: "Back to home",
   editNickHint: "Double-click to edit your name",
+  takeback: "↶ Takeback",
+  takebackAsks: "wants to take back a move ↶",
+  allow: "Allow",
+  takebackSent: "↶ Takeback requested — waiting…",
+  takebackDeclined: "Takeback declined",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -182,6 +187,11 @@ const fr: Record<TKey, string> = {
   leftSuffix: "a quitté la partie",
   okHome: "Retour à l'accueil",
   editNickHint: "Double-cliquez pour modifier votre nom",
+  takeback: "↶ Reprendre",
+  takebackAsks: "veut reprendre un coup ↶",
+  allow: "Autoriser",
+  takebackSent: "↶ Demande de reprise — en attente…",
+  takebackDeclined: "Reprise refusée",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };
