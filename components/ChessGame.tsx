@@ -1531,37 +1531,48 @@ export default function ChessGame() {
 
       {/* game over */}
       {gameOver && showResult && result && (
-        <div className="modal-overlay" onClick={() => setShowResult(false)}>
+        <div
+          className="modal-overlay"
+          onClick={
+            result.kind === "abandon" ? undefined : () => setShowResult(false)
+          }
+        >
           <div
             className={"modal " + modalTone}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-title">{modalTitle}</div>
             <div className="modal-sub">{modalSub}</div>
-            <div className="modal-score">
-              <span className="turn-dot w" /> {score.w}
-              <span className="dash">–</span>
-              {score.b} <span className="turn-dot b" />
-            </div>
-            <div className="modal-btns">
-              <button
-                className="primary"
-                onClick={() => {
-                  setShowResult(false);
-                  newGame();
-                }}
-                disabled={isPlayer === false && !!online}
-              >
-                {online ? tr(lang, "rematch") : tr(lang, "newGame")}
-              </button>
-              {result.kind === "abandon" ? (
-                <button onClick={leaveOnline}>{tr(lang, "leave")}</button>
-              ) : (
-                <button onClick={() => setShowResult(false)}>
-                  {tr(lang, "close")}
+            {result.kind === "abandon" ? (
+              <div className="modal-btns">
+                <button className="primary" onClick={leaveOnline}>
+                  {tr(lang, "okHome")}
                 </button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <>
+                <div className="modal-score">
+                  <span className="turn-dot w" /> {score.w}
+                  <span className="dash">–</span>
+                  {score.b} <span className="turn-dot b" />
+                </div>
+                <div className="modal-btns">
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      setShowResult(false);
+                      newGame();
+                    }}
+                    disabled={isPlayer === false && !!online}
+                  >
+                    {online ? tr(lang, "rematch") : tr(lang, "newGame")}
+                  </button>
+                  <button onClick={() => setShowResult(false)}>
+                    {tr(lang, "close")}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
