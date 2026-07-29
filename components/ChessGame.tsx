@@ -260,6 +260,8 @@ export default function ChessGame() {
   const cursorHideRef = useRef<number | undefined>(undefined);
   const isHostRef = useRef(false);
   const scoreRef = useRef({ w: 0, b: 0 });
+  const lastSeenRef = useRef<Record<string, number>>({});
+  const leftFiredRef = useRef<Record<string, boolean>>({});
   const pendingLeaveRef = useRef<number | undefined>(undefined);
   const pendingLeaveIdRef = useRef<string | null>(null);
 
@@ -311,6 +313,7 @@ export default function ChessGame() {
   const [takebackIncoming, setTakebackIncoming] = useState(false);
   const [takebackPending, setTakebackPending] = useState(false);
   const [leftInfo, setLeftInfo] = useState<{ nick: string } | null>(null);
+  const [leaverNick, setLeaverNick] = useState("");
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
     y: number;
@@ -438,6 +441,20 @@ export default function ChessGame() {
     }
   }, []);
 
+  const fireLeave = useCallback(
+    (id: string, nick: string) => {
+      if (leftFiredRef.current[id]) return;
+      leftFiredRef.current[id] = true;
+      setOnline((o) => (o ? { ...o, status: "disconnected" } : o));
+      if (myRoleRef.current === "spec") setLeftInfo({ nick });
+      else {
+        setLeaverNick(nick);
+        finish({ kind: "abandon", winner: myRoleRef.current as Color });
+      }
+    },
+    [finish],
+  );
+
   const evaluateEnd = useCallback((): GameResult | null => {
     const g = engineRef.current;
     const legal = g.legalMoves(g.turn);
@@ -557,6 +574,7 @@ export default function ChessGame() {
     return () => clearInterval(id);
   }, [flagTimeout]);
 
+  // heartbeat: broadcast our ply so a dropped move can't deadlock the game
   useEffect(() => {
     const id = setInterval(() => {
       const on = onlineRef.current;
@@ -565,6 +583,24 @@ export default function ChessGame() {
     }, 1000);
     return () => clearInterval(id);
   }, [publish]);
+
+  // presence watchdog: if a player goes silent (no heartbeat) for 8s, treat them as having left
+  useEffect(() => {
+    const id = setInterval(() => {
+      const on = onlineRef.current;
+      if (!on || on.status !== "connected") return;
+      const r = rosterRef.current;
+      const now = performance.now();
+      (
+        [r.white, r.black].filter(Boolean) as { id: string; nick: string }[]
+      ).forEach((pl) => {
+        if (pl.id === myId) return;
+        const seen = lastSeenRef.current[pl.id];
+        if (seen && now - seen > 8000) fireLeave(pl.id, pl.nick);
+      });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [fireLeave, myId]);
 
   useEffect(() => {
     tcIdRef.current = tcId;
@@ -592,6 +628,9 @@ export default function ChessGame() {
       roomRef.current = room;
       myNickRef.current = nick;
       isHostRef.current = isHost;
+      lastSeenRef.current = {};
+      leftFiredRef.current = {};
+      setLeaverNick("");
       setMode("human");
       setLocked(false);
       setRematch("none");
@@ -656,6 +695,7 @@ export default function ChessGame() {
           return;
         }
         if (!msg || msg.s === myId) return;
+        if (msg.t !== "left") lastSeenRef.current[msg.s] = performance.now();
         if (pendingLeaveIdRef.current && msg.s === pendingLeaveIdRef.current) {
           clearTimeout(pendingLeaveRef.current);
           pendingLeaveRef.current = undefined;
@@ -853,23 +893,12 @@ export default function ChessGame() {
           const r = rosterRef.current;
           const isPlayer =
             r.white.id === msg.id || (r.black && r.black.id === msg.id);
-          if (isPlayer) {
+          if (isPlayer && msg.explicit) {
             const nick =
               r.white.id === msg.id ? r.white.nick : (r.black?.nick ?? "");
-            const trigger = () => {
-              setOnline((o) => (o ? { ...o, status: "disconnected" } : o));
-              if (myRoleRef.current === "spec") setLeftInfo({ nick });
-              else finish({ kind: "abandon", winner: myRoleRef.current });
-            };
-            if (msg.explicit) trigger();
-            else {
-              // could be a transient broker drop or a page reload — wait to see if they come back
-              pendingLeaveIdRef.current = msg.id;
-              if (pendingLeaveRef.current)
-                clearTimeout(pendingLeaveRef.current);
-              pendingLeaveRef.current = window.setTimeout(trigger, 20000);
-            }
+            fireLeave(msg.id, nick);
           }
+          // non-explicit (broker "will") is ignored here; the presence watchdog handles real drops
         }
       });
 
@@ -881,6 +910,7 @@ export default function ChessGame() {
       publish,
       showToast,
       finish,
+      fireLeave,
       evaluateEnd,
       applyRoster,
       myId,
@@ -920,14 +950,23 @@ export default function ChessGame() {
       clearTimeout(pendingLeaveRef.current);
       pendingLeaveRef.current = undefined;
     }
-    if (clientRef.current) {
+    const c = clientRef.current;
+    if (c) {
       publish({ t: "left", id: myId, explicit: true });
-      clientRef.current.end(true);
+      setTimeout(() => {
+        try {
+          c.end(true);
+        } catch {
+          /* noop */
+        }
+      }, 350);
     }
     clientRef.current = null;
     roomRef.current = "";
     onlineRef.current = null;
     rosterRef.current = { white: { id: "", nick: "" }, black: null };
+    lastSeenRef.current = {};
+    leftFiredRef.current = {};
     clearSession();
     setOnline(null);
     setRematch("none");
@@ -1316,7 +1355,10 @@ export default function ChessGame() {
   if (result) {
     if (result.kind === "checkmate") modalSub = tr(lang, "checkmate");
     else if (result.kind === "timeout") modalSub = tr(lang, "timesUp");
-    else if (result.kind === "abandon") modalSub = tr(lang, "opponentLeft");
+    else if (result.kind === "abandon")
+      modalSub = leaverNick
+        ? `${leaverNick} ${tr(lang, "leftSuffix")}`
+        : tr(lang, "opponentLeft");
     else if (result.kind === "stalemate") modalSub = tr(lang, "stalemateSub");
     else
       modalSub =
