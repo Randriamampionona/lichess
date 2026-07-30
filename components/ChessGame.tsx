@@ -30,6 +30,10 @@ const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
 const BROKER = "wss://broker.emqx.io:8084/mqtt";
 const TOPIC = (room: string) => `chessnext/v1/${room}`;
 const QOS = 1 as const;
+// presence tuning
+const FREEZE_GAP = 4000; // if two watchdog ticks are >4s apart, THIS tab was suspended — don't blame the peer
+const PEER_STALE = 12000; // peer silent this long (while we're awake) → show "reconnecting…"
+const PEER_LEAVE = 60000; // peer silent this long (while we're awake) → declare they left
 
 const TCS: Record<TcId, { base: number; inc: number } | null> = {
   none: null,
@@ -261,6 +265,7 @@ export default function ChessGame() {
   const isHostRef = useRef(false);
   const scoreRef = useRef({ w: 0, b: 0 });
   const lastSeenRef = useRef<Record<string, number>>({});
+  const watchdogPrevRef = useRef(0);
   const leftFiredRef = useRef<Record<string, boolean>>({});
   const pendingLeaveRef = useRef<number | undefined>(undefined);
   const pendingLeaveIdRef = useRef<string | null>(null);
@@ -314,6 +319,7 @@ export default function ChessGame() {
   const [takebackPending, setTakebackPending] = useState(false);
   const [leftInfo, setLeftInfo] = useState<{ nick: string } | null>(null);
   const [leaverNick, setLeaverNick] = useState("");
+  const [peerAway, setPeerAway] = useState(false);
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
     y: number;
@@ -577,19 +583,46 @@ export default function ChessGame() {
   // heartbeat + presence watchdog, driven by a Web Worker so it keeps running
   // even when the tab is hidden/unfocused (main-thread timers get throttled there)
   useEffect(() => {
+    watchdogPrevRef.current = performance.now();
     const tick = () => {
       const on = onlineRef.current;
-      if (!on || on.status !== "connected") return;
-      publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
-      const r = rosterRef.current;
       const now = performance.now();
-      (
-        [r.white, r.black].filter(Boolean) as { id: string; nick: string }[]
-      ).forEach((pl) => {
+      const gap = now - watchdogPrevRef.current;
+      watchdogPrevRef.current = now;
+      if (!on || on.status !== "connected") return;
+
+      // resume heartbeat
+      publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
+
+      const r = rosterRef.current;
+      const players = [r.white, r.black].filter(Boolean) as {
+        id: string;
+        nick: string;
+      }[];
+
+      // If two ticks were far apart, THIS tab was frozen/suspended (phone locked, long background).
+      // We just woke up — don't accuse the peer of leaving. Give everyone a fresh grace and re-sync.
+      if (gap > FREEZE_GAP) {
+        players.forEach((pl) => {
+          lastSeenRef.current[pl.id] = now;
+        });
+        setPeerAway(false);
+        publish({ t: "join", id: myId, nick: myNickRef.current });
+        publish({ t: "resync" });
+        return;
+      }
+
+      // Normal (awake) presence check
+      let anyAway = false;
+      players.forEach((pl) => {
         if (pl.id === myId) return;
         const seen = lastSeenRef.current[pl.id];
-        if (seen && now - seen > 10000) fireLeave(pl.id, pl.nick);
+        if (!seen) return;
+        const silent = now - seen;
+        if (silent > PEER_LEAVE) fireLeave(pl.id, pl.nick);
+        else if (silent > PEER_STALE) anyAway = true;
       });
+      setPeerAway(anyAway);
     };
     let worker: Worker | null = null;
     let iv: number | undefined;
@@ -612,10 +645,11 @@ export default function ChessGame() {
     };
   }, [publish, fireLeave, myId]);
 
-  // returning to a tab that may have been frozen: don't instantly assume the peer left; resync instead
+  // coming back to a tab that may have been frozen: reset timers, reconnect, and resync — never auto-leave
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== "visible") return;
+      watchdogPrevRef.current = performance.now();
       const on = onlineRef.current;
       if (!on || on.status !== "connected") return;
       const now = performance.now();
@@ -623,11 +657,19 @@ export default function ChessGame() {
       ([r.white, r.black].filter(Boolean) as { id: string }[]).forEach((pl) => {
         lastSeenRef.current[pl.id] = now;
       });
+      setPeerAway(false);
+      try {
+        const c = clientRef.current;
+        if (c && !c.connected) c.reconnect();
+      } catch {
+        /* noop */
+      }
+      publish({ t: "join", id: myId, nick: myNickRef.current });
       publish({ t: "resync" });
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [publish]);
+  }, [publish, myId]);
 
   useEffect(() => {
     tcIdRef.current = tcId;
@@ -667,6 +709,8 @@ export default function ChessGame() {
       setRemoteCursor(null);
       setTakebackIncoming(false);
       setTakebackPending(false);
+      setLeaverNick("");
+      setPeerAway(false);
       if (restore) {
         tcIdRef.current = restore.tcId;
         setTcId(restore.tcId);
@@ -1004,6 +1048,8 @@ export default function ChessGame() {
     setRemoteCursor(null);
     setTakebackIncoming(false);
     setTakebackPending(false);
+    setLeaverNick("");
+    setPeerAway(false);
     setLeaverNick("");
     resetTo([]);
     if (window.location.hash)
@@ -1631,6 +1677,10 @@ export default function ChessGame() {
             )}
           </div>
         </div>
+      )}
+
+      {peerAway && !gameOver && online?.status === "connected" && (
+        <div className="reconnect-note">⟳ {tr(lang, "oppReconnecting")}</div>
       )}
 
       {toast && <div className="toast">{toast}</div>}

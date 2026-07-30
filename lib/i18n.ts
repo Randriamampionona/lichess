@@ -94,6 +94,7 @@ const en = {
   allow: "Allow",
   takebackSent: "↶ Takeback requested — waiting…",
   takebackDeclined: "Takeback declined",
+  oppReconnecting: "Opponent reconnecting…",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -192,6 +193,7 @@ const fr: Record<TKey, string> = {
   allow: "Autoriser",
   takebackSent: "↶ Demande de reprise — en attente…",
   takebackDeclined: "Reprise refusée",
+  oppReconnecting: "Reconnexion de l'adversaire…",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };
