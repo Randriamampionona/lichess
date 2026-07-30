@@ -574,21 +574,13 @@ export default function ChessGame() {
     return () => clearInterval(id);
   }, [flagTimeout]);
 
-  // heartbeat: broadcast our ply so a dropped move can't deadlock the game
+  // heartbeat + presence watchdog, driven by a Web Worker so it keeps running
+  // even when the tab is hidden/unfocused (main-thread timers get throttled there)
   useEffect(() => {
-    const id = setInterval(() => {
+    const tick = () => {
       const on = onlineRef.current;
       if (!on || on.status !== "connected") return;
       publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [publish]);
-
-  // presence watchdog: if a player goes silent (no heartbeat) for 8s, treat them as having left
-  useEffect(() => {
-    const id = setInterval(() => {
-      const on = onlineRef.current;
-      if (!on || on.status !== "connected") return;
       const r = rosterRef.current;
       const now = performance.now();
       (
@@ -596,11 +588,46 @@ export default function ChessGame() {
       ).forEach((pl) => {
         if (pl.id === myId) return;
         const seen = lastSeenRef.current[pl.id];
-        if (seen && now - seen > 8000) fireLeave(pl.id, pl.nick);
+        if (seen && now - seen > 10000) fireLeave(pl.id, pl.nick);
       });
-    }, 2000);
-    return () => clearInterval(id);
-  }, [fireLeave, myId]);
+    };
+    let worker: Worker | null = null;
+    let iv: number | undefined;
+    try {
+      const url = URL.createObjectURL(
+        new Blob(["setInterval(function(){postMessage(0)},1000)"], {
+          type: "application/javascript",
+        }),
+      );
+      worker = new Worker(url);
+      worker.onmessage = tick;
+      URL.revokeObjectURL(url);
+    } catch {
+      // fallback (e.g. strict CSP blocks blob workers): main-thread timer, throttled when hidden
+      iv = window.setInterval(tick, 1000);
+    }
+    return () => {
+      if (worker) worker.terminate();
+      if (iv) clearInterval(iv);
+    };
+  }, [publish, fireLeave, myId]);
+
+  // returning to a tab that may have been frozen: don't instantly assume the peer left; resync instead
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      const on = onlineRef.current;
+      if (!on || on.status !== "connected") return;
+      const now = performance.now();
+      const r = rosterRef.current;
+      ([r.white, r.black].filter(Boolean) as { id: string }[]).forEach((pl) => {
+        lastSeenRef.current[pl.id] = now;
+      });
+      publish({ t: "resync" });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [publish]);
 
   useEffect(() => {
     tcIdRef.current = tcId;
