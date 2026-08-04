@@ -114,6 +114,59 @@ export default function Board({
     return dispToBoard(dr, dc);
   };
 
+  // is `to` a valid move of the piece currently on `from`? (movement pattern, respecting blockers)
+  const isPieceMove = (from: Sq, to: Sq): boolean => {
+    const p = position[from[0]][from[1]];
+    if (!p) return false;
+    const dr = to[0] - from[0],
+      dc = to[1] - from[1];
+    const adr = Math.abs(dr),
+      adc = Math.abs(dc);
+    if (adr === 0 && adc === 0) return false;
+    const clearPath = (): boolean => {
+      const sr = Math.sign(dr),
+        sc = Math.sign(dc);
+      let r = from[0] + sr,
+        c = from[1] + sc;
+      while (r !== to[0] || c !== to[1]) {
+        if (position[r][c]) return false;
+        r += sr;
+        c += sc;
+      }
+      return true;
+    };
+    switch (p.toLowerCase()) {
+      case "n":
+        return (adr === 1 && adc === 2) || (adr === 2 && adc === 1);
+      case "k":
+        return adr <= 1 && adc <= 1;
+      case "r":
+        return (adr === 0 || adc === 0) && clearPath();
+      case "b":
+        return adr === adc && clearPath();
+      case "q":
+        return (adr === 0 || adc === 0 || adr === adc) && clearPath();
+      case "p": {
+        const dir = isW(p) ? -1 : 1; // white moves up the board (row index decreases)
+        const startRow = isW(p) ? 6 : 1;
+        if (dc === 0) {
+          if (dr === dir && !position[to[0]][to[1]]) return true;
+          if (
+            from[0] === startRow &&
+            dr === 2 * dir &&
+            !position[from[0] + dir][from[1]] &&
+            !position[to[0]][to[1]]
+          )
+            return true;
+          return false;
+        }
+        return adc === 1 && dr === dir; // diagonal (capture / attack indicator)
+      }
+      default:
+        return false;
+    }
+  };
+
   const resolveMove = (br: number, bc: number): boolean => {
     const opts = targets.filter((m) => m.to[0] === br && m.to[1] === bc);
     if (opts.length === 0) return false;
@@ -204,8 +257,9 @@ export default function Board({
       if (from) {
         const to = squareFromEvent(e);
         if (to) {
-          if (sameSq(from, to)) toggleHighlight(from);
-          else toggleArrow(from, to);
+          if (sameSq(from, to))
+            toggleHighlight(from); // right-click a square = red highlight
+          else if (isPieceMove(from, to)) toggleArrow(from, to); // arrow only if it's a real move of that piece
         }
       }
       return;
@@ -252,8 +306,6 @@ export default function Board({
     const knight = (adr === 1 && adc === 2) || (adr === 2 && adc === 1);
     const headLen = 0.34,
       headW = 0.28;
-
-    // knight arrows bend into an L: travel the longer display axis first, then turn
     let cx = x1,
       cy = y1;
     if (knight) {
@@ -266,14 +318,14 @@ export default function Board({
       }
     }
     const lx = knight ? cx : x1,
-      ly = knight ? cy : y1; // start of the final (arrowhead) leg
+      ly = knight ? cy : y1;
     const dx = x2 - lx,
       dy = y2 - ly;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len,
       uy = dy / len;
     const ex = x2 - ux * headLen,
-      ey = y2 - uy * headLen; // shaft stops before the head
+      ey = y2 - uy * headLen;
     const px = -uy,
       py = ux;
     const pts = knight
@@ -283,9 +335,28 @@ export default function Board({
     return { pts, head };
   };
 
+  const GUT = 16;
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "var(--muted, #9a8f7d)",
+    lineHeight: 1,
+  };
+
   return (
-    <div className="board-frame">
-      <div className="board-wrap">
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        boxSizing: "border-box",
+        padding: `0 0 ${GUT}px ${GUT}px`,
+        margin: "0 auto",
+      }}
+    >
+      <div
+        className="board-wrap"
+        style={{ position: "relative", width: "100%", maxWidth: "100%" }}
+      >
         <div
           ref={boardRef}
           className="board"
@@ -336,7 +407,20 @@ export default function Board({
         </div>
 
         {arrows.length > 0 && (
-          <svg className="annot-arrows" viewBox="0 0 8 8" aria-hidden="true">
+          <svg
+            className="annot-arrows"
+            viewBox="0 0 8 8"
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              pointerEvents: "none",
+              zIndex: 4,
+              overflow: "visible",
+            }}
+          >
             {arrows.map((a, i) => {
               const g = arrowGeo(a);
               return (
@@ -403,12 +487,39 @@ export default function Board({
         )}
       </div>
 
-      <div className="ranks">
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: GUT,
+          width: GUT,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-around",
+          alignItems: "center",
+          pointerEvents: "none",
+          ...labelStyle,
+        }}
+      >
         {rankLabels.map((n, i) => (
           <span key={i}>{n}</span>
         ))}
       </div>
-      <div className="files">
+      <div
+        style={{
+          position: "absolute",
+          left: GUT,
+          right: 0,
+          bottom: 0,
+          height: GUT,
+          display: "flex",
+          justifyContent: "space-around",
+          alignItems: "center",
+          pointerEvents: "none",
+          ...labelStyle,
+        }}
+      >
         {fileLabels.map((f, i) => (
           <span key={i}>{f}</span>
         ))}
