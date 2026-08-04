@@ -396,7 +396,13 @@ export default function Board({
                     <div className={p || target.enpassant ? "ring" : "dot"} />
                   )}
                   {p && !hidden && (
-                    <div className={"piece " + (isW(p) ? "w" : "b")}>
+                    <div
+                      className={
+                        "piece " +
+                        (isW(p) ? "w" : "b") +
+                        (target ? " capturable" : "")
+                      }
+                    >
                       {GLYPH[p.toLowerCase() as PieceType]}
                     </div>
                   )}

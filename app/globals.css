@@ -1587,14 +1587,10 @@ body {
   line-height: 1;
 }
 
-/* ===== capture hint: red ring on enemy pieces you can take ===== */
-.sq .ring {
-  position: absolute;
-  inset: 0;
-  border: none;
-  background: none;
-  box-shadow: inset 0 0 0 3px rgba(231, 76, 60, 0.85);
-  border-radius: 4px;
-  z-index: 1;            /* under the piece (piece is z-index 2) */
-  pointer-events: none;
+/* ===== capture hint: red ring on the enemy PIECE ===== */
+.piece.capturable {
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 3px rgba(231, 76, 60, 0.9),
+    0 0 10px rgba(231, 76, 60, 0.6);
 }
