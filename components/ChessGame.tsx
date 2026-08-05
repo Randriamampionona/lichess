@@ -267,6 +267,7 @@ export default function ChessGame() {
   const lastSeenRef = useRef<Record<string, number>>({});
   const watchdogPrevRef = useRef(0);
   const leftFiredRef = useRef<Record<string, boolean>>({});
+  const takebackUsedRef = useRef(0);
   const pendingLeaveRef = useRef<number | undefined>(undefined);
   const pendingLeaveIdRef = useRef<string | null>(null);
 
@@ -539,6 +540,7 @@ export default function ChessGame() {
     clockRef.current = { w: base, b: base };
     lastTickRef.current = performance.now();
     countedRef.current = false;
+    takebackUsedRef.current = 0;
     setClock({ w: base, b: base });
     setHistory(moves);
     setLastMove(last);
@@ -956,6 +958,7 @@ export default function ChessGame() {
           setTakebackIncoming(true);
         } else if (msg.t === "takeback-accept") {
           setTakebackPending(false);
+          takebackUsedRef.current += 1;
           applyTakeback();
         } else if (msg.t === "takeback-decline") {
           setTakebackPending(false);
@@ -1202,6 +1205,10 @@ export default function ChessGame() {
       historyRef.current.length === 0
     )
       return;
+    if (takebackUsedRef.current >= 3) {
+      showToast(tr(langRef.current, "takebackLimit"));
+      return;
+    }
     setTakebackPending(true);
     publish({ t: "takeback" });
     showToast(tr(langRef.current, "takebackSent"));
