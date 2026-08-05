@@ -379,7 +379,13 @@ export default function ChessGame() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem("chess-lang");
-    if (saved === "fr" || saved === "en") setLang(saved);
+    if (saved === "fr" || saved === "en") {
+      setLang(saved);
+      return;
+    }
+    // no saved choice yet → fall back to the browser language
+    const nav = navigator.languages?.[0] || navigator.language || "en";
+    setLang(nav.toLowerCase().startsWith("fr") ? "fr" : "en");
   }, []);
   useEffect(() => {
     window.localStorage.setItem("chess-lang", lang);
