@@ -115,7 +115,15 @@ type Msg =
     }
   | { t: "cursor"; s: string; x: number; y: number; o: Color }
   | { t: "nick"; s: string; id: string; nick: string }
-  | { t: "ping"; s: string; ply: number; key: string }
+  | {
+      t: "ping";
+      s: string;
+      ply: number;
+      key: string;
+      ts?: number;
+      rtt?: number;
+    }
+  | { t: "pong"; s: string; ts: number }
   | { t: "result"; s: string; result: GameResult }
   | { t: "left"; s: string; id: string; explicit?: boolean };
 
@@ -152,7 +160,8 @@ type Outgoing =
     }
   | { t: "cursor"; x: number; y: number; o: Color }
   | { t: "nick"; id: string; nick: string }
-  | { t: "ping"; ply: number; key: string }
+  | { t: "ping"; ply: number; key: string; ts?: number; rtt?: number }
+  | { t: "pong"; ts: number }
   | { t: "result"; result: GameResult }
   | { t: "left"; id: string; explicit?: boolean };
 
@@ -226,6 +235,36 @@ function clearSession() {
   }
 }
 
+function PingBars({ rtt }: { rtt: number | null }) {
+  const level =
+    rtt == null ? 0 : rtt < 120 ? 4 : rtt < 300 ? 3 : rtt < 600 ? 2 : 1;
+  const color =
+    level >= 3
+      ? "#6fce7d"
+      : level === 2
+        ? "#e5a35b"
+        : level === 1
+          ? "#e5603c"
+          : "#6b6560";
+  const heights = [5, 8, 11, 14];
+  return (
+    <span
+      className="ping-bars"
+      title={rtt == null ? "…" : `${Math.round(rtt)} ms`}
+    >
+      {heights.map((h, i) => (
+        <span
+          key={i}
+          style={{
+            height: h,
+            background: i < level ? color : "rgba(255,255,255,0.15)",
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export default function ChessGame() {
   const engineRef = useRef<Chess>(new Chess());
   const posCountsRef = useRef<Record<string, number>>({});
@@ -264,6 +303,7 @@ export default function ChessGame() {
   const cursorHideRef = useRef<number | undefined>(undefined);
   const isHostRef = useRef(false);
   const scoreRef = useRef({ w: 0, b: 0 });
+  const myRttRef = useRef<number | null>(null);
   const lastSeenRef = useRef<Record<string, number>>({});
   const watchdogPrevRef = useRef(0);
   const leftFiredRef = useRef<Record<string, boolean>>({});
@@ -321,6 +361,10 @@ export default function ChessGame() {
   const [leftInfo, setLeftInfo] = useState<{ nick: string } | null>(null);
   const [leaverNick, setLeaverNick] = useState("");
   const [peerAway, setPeerAway] = useState(false);
+  const [ping, setPing] = useState<{ w: number | null; b: number | null }>({
+    w: null,
+    b: null,
+  });
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
     y: number;
@@ -600,7 +644,13 @@ export default function ChessGame() {
       if (!on || on.status !== "connected") return;
 
       // resume heartbeat
-      publish({ t: "ping", ply: plyRef.current, key: engineRef.current.key() });
+      publish({
+        t: "ping",
+        ply: plyRef.current,
+        key: engineRef.current.key(),
+        ts: Date.now(),
+        rtt: myRttRef.current ?? undefined,
+      });
 
       const r = rosterRef.current;
       const players = [r.white, r.black].filter(Boolean) as {
@@ -719,6 +769,8 @@ export default function ChessGame() {
       setTakebackPending(false);
       setLeaverNick("");
       setPeerAway(false);
+      myRttRef.current = null;
+      setPing({ w: null, b: null });
       if (restore) {
         tcIdRef.current = restore.tcId;
         setTcId(restore.tcId);
@@ -805,7 +857,6 @@ export default function ChessGame() {
               score: scoreRef.current,
             });
           } else if (msg.id === rosterRef.current.white.id) {
-            // host reappeared (e.g. after a reload) — re-announce so it can rebuild the roster
             publish({ t: "join", id: myId, nick: myNickRef.current });
           }
         } else if (msg.t === "roster") {
@@ -821,7 +872,6 @@ export default function ChessGame() {
           if (!iAmHost && msg.score) setScore(msg.score);
           let adopt = msg.moves.length > plyRef.current;
           if (!adopt && !iAmHost && msg.moves.length === plyRef.current) {
-            // same move count — adopt only if the actual position differs (host is source of truth)
             const g2 = new Chess();
             const rp = replayMoves(msg.moves);
             for (const it of rp) g2.applyMove(it.move);
@@ -860,6 +910,20 @@ export default function ChessGame() {
           });
         } else if (msg.t === "ping") {
           const iAmHost = rosterRef.current.white.id === myId;
+          // latency: reply with a pong, and record the sender's reported ping for their bar
+          if (myRoleRef.current !== "spec" && typeof msg.ts === "number")
+            publish({ t: "pong", ts: msg.ts });
+          if (typeof msg.rtt === "number") {
+            const rttVal = msg.rtt;
+            const rr = rosterRef.current;
+            const col =
+              rr.white.id === msg.s
+                ? "w"
+                : rr.black && rr.black.id === msg.s
+                  ? "b"
+                  : null;
+            if (col) setPing((pg) => ({ ...pg, [col]: rttVal }));
+          }
           if (msg.ply > plyRef.current) publish({ t: "resync" });
           else if (msg.ply < plyRef.current)
             publish({
@@ -870,7 +934,6 @@ export default function ChessGame() {
               score: scoreRef.current,
             });
           else if (msg.key && msg.key !== engineRef.current.key()) {
-            // same move count but different position — host pushes truth, guest pulls it
             if (iAmHost)
               publish({
                 t: "state",
@@ -881,6 +944,11 @@ export default function ChessGame() {
               });
             else publish({ t: "resync" });
           }
+        } else if (msg.t === "pong") {
+          const rtt = Date.now() - msg.ts;
+          myRttRef.current = rtt;
+          const me = myRoleRef.current;
+          if (me === "w" || me === "b") setPing((pg) => ({ ...pg, [me]: rtt }));
         } else if (msg.t === "tc") {
           setTcId(msg.tcId);
         } else if (msg.t === "timeout") {
@@ -978,7 +1046,6 @@ export default function ChessGame() {
               r.white.id === msg.id ? r.white.nick : (r.black?.nick ?? "");
             fireLeave(msg.id, nick);
           }
-          // non-explicit (broker "will") is ignored here; the presence watchdog handles real drops
         }
       });
 
@@ -1059,6 +1126,8 @@ export default function ChessGame() {
     setTakebackPending(false);
     setLeaverNick("");
     setPeerAway(false);
+    myRttRef.current = null;
+    setPing({ w: null, b: null });
     setLeaverNick("");
     resetTo([]);
     if (window.location.hash)
@@ -1424,6 +1493,7 @@ export default function ChessGame() {
             {labelFor(c)}
           </span>
         )}
+        {online && online.status === "connected" && <PingBars rtt={ping[c]} />}
         <span className="pscore">{score[c]}</span>
         {timed ? (
           <span
