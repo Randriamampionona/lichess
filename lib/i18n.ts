@@ -96,6 +96,10 @@ const en = {
   takebackDeclined: "Takeback declined",
   oppReconnecting: "Opponent reconnecting…",
   takebackLimit: "No takebacks left (max 3)",
+  signInGoogle: "Sign in with Google",
+  signOut: "Sign out",
+  signInToPlay: "Sign in to play online",
+  signInFailed: "Sign-in failed — try again",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -196,6 +200,10 @@ const fr: Record<TKey, string> = {
   takebackDeclined: "Reprise refusée",
   oppReconnecting: "Reconnexion de l'adversaire…",
   takebackLimit: "Plus de reprises (max 3)",
+  signInGoogle: "Se connecter avec Google",
+  signOut: "Se déconnecter",
+  signInToPlay: "Connectez-vous pour jouer en ligne",
+  signInFailed: "Échec de la connexion — réessayez",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };

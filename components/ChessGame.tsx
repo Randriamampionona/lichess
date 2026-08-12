@@ -23,6 +23,22 @@ import SidePanel, {
   TcId,
 } from "@/components/SidePanel";
 import Chat, { ChatMsg, QuickSend } from "@/components/Chat";
+import Navbar from "@/components/Navbar";
+import {
+  watchAuth,
+  signInWithGoogle,
+  signOut,
+  ensureProfile,
+  watchProfile,
+  setNickname,
+  Profile,
+} from "@/lib/account";
+import {
+  createGame,
+  joinGame,
+  applyRating,
+  GameResult as FbResult,
+} from "@/lib/gameStore";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
@@ -308,6 +324,7 @@ export default function ChessGame() {
   const watchdogPrevRef = useRef(0);
   const leftFiredRef = useRef<Record<string, boolean>>({});
   const takebackUsedRef = useRef(0);
+  const pendingJoinRef = useRef<string>("");
   const pendingLeaveRef = useRef<number | undefined>(undefined);
   const pendingLeaveIdRef = useRef<string | null>(null);
 
@@ -365,6 +382,10 @@ export default function ChessGame() {
     w: null,
     b: null,
   });
+  const [authReady, setAuthReady] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const gameIdRef = useRef<string>(""); // Firestore game id (also used as the MQTT room)
+  const ratedRef = useRef(true);
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
     y: number;
@@ -415,11 +436,12 @@ export default function ChessGame() {
   useEffect(() => {
     if (nickPrompt)
       setNickInput(
-        (typeof window !== "undefined" &&
-          window.localStorage.getItem("chess-nick")) ||
+        profile?.nickname ||
+          (typeof window !== "undefined" &&
+            window.localStorage.getItem("chess-nick")) ||
           randomNick(),
       );
-  }, [nickPrompt]);
+  }, [nickPrompt, profile]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("chess-lang");
@@ -435,6 +457,42 @@ export default function ChessGame() {
     window.localStorage.setItem("chess-lang", lang);
   }, [lang]);
 
+  useEffect(() => {
+    let unsubProfile: (() => void) | undefined;
+    const unsubAuth = watchAuth(async (u) => {
+      unsubProfile?.();
+      unsubProfile = undefined;
+      if (!u) {
+        setProfile(null);
+        setAuthReady(true);
+        return;
+      }
+      const p = await ensureProfile(
+        u.uid,
+        u.displayName || localStorage.getItem("chess-nick") || randomNick(),
+        u.email || "",
+      );
+      setProfile(p);
+      myNickRef.current = p.nickname;
+      setAuthReady(true);
+      try {
+        localStorage.setItem("chess-nick", p.nickname);
+      } catch {
+        /* noop */
+      }
+      unsubProfile = watchProfile(u.uid, (pp) => {
+        if (pp) {
+          setProfile(pp);
+          myNickRef.current = pp.nickname;
+        }
+      });
+    });
+    return () => {
+      unsubProfile?.();
+      unsubAuth();
+    };
+  }, []);
+
   const publish = useCallback(
     (msg: Outgoing) => {
       const c = clientRef.current;
@@ -445,6 +503,24 @@ export default function ChessGame() {
     },
     [myId],
   );
+
+  // keep the live board name in sync when the profile nickname changes (e.g. renamed from the navbar)
+  useEffect(() => {
+    if (!profile) return;
+    const n = profile.nickname;
+    myNickRef.current = n;
+    const on = onlineRef.current;
+    if (!on || on.role === "spec") return;
+    const r = rosterRef.current;
+    if (r.white.id === myId) r.white = { ...r.white, nick: n };
+    else if (r.black && r.black.id === myId) r.black = { ...r.black, nick: n };
+    setOnline((o) =>
+      o
+        ? { ...o, whiteNick: r.white.nick, blackNick: r.black?.nick ?? null }
+        : o,
+    );
+    if (on.status === "connected") publish({ t: "nick", id: myId, nick: n });
+  }, [profile, myId, publish]);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -1064,7 +1140,7 @@ export default function ChessGame() {
     ],
   );
 
-  const confirmNick = useCallback(() => {
+  const confirmNick = useCallback(async () => {
     const np = nickPrompt;
     if (!np) return;
     const nick = (nickInput.trim() || randomNick()).slice(0, 18);
@@ -1074,23 +1150,56 @@ export default function ChessGame() {
       /* noop */
     }
     setNickPrompt(null);
-    connectRoom(np.room, np.isHost, nick);
+    myNickRef.current = nick;
+
     if (np.isHost) {
-      const url = `${window.location.origin}${window.location.pathname}#live=${np.room}`;
-      window.history.replaceState(null, "", `#live=${np.room}`);
+      let id = np.room; // fallback if profile not ready yet
+      if (profile) {
+        try {
+          id = await createGame(
+            { uid: profile.uid, nick, rating: profile.rating },
+            tcIdRef.current,
+            ratedRef.current,
+          );
+        } catch {
+          /* noop */
+        }
+      }
+      gameIdRef.current = id;
+      connectRoom(id, true, nick); // MQTT room = Firestore game id ✅
+      const url = `${window.location.origin}${window.location.pathname}#live=${id}`;
+      window.history.replaceState(null, "", `#live=${id}`);
       if (navigator.clipboard?.writeText)
         navigator.clipboard
           .writeText(url)
           .then(() => showToast(tr(langRef.current, "inviteCopied")))
           .catch(() => showToast(url));
       else showToast(url);
+    } else {
+      gameIdRef.current = np.room;
+      if (profile) {
+        try {
+          await joinGame(np.room, {
+            uid: profile.uid,
+            nick,
+            rating: profile.rating,
+          });
+        } catch {
+          /* noop */
+        }
+      }
+      connectRoom(np.room, false, nick);
     }
-  }, [nickPrompt, nickInput, connectRoom, showToast]);
+  }, [nickPrompt, nickInput, connectRoom, showToast, profile]);
 
   const startHost = useCallback(() => {
+    if (!profile) {
+      showToast(tr(langRef.current, "signInToPlay"));
+      return;
+    }
     const room = Math.random().toString(36).slice(2, 8);
     setNickPrompt({ isHost: true, room });
-  }, []);
+  }, [profile, showToast]);
 
   const leaveOnline = useCallback(() => {
     if (pendingLeaveRef.current) {
@@ -1134,20 +1243,23 @@ export default function ChessGame() {
       window.history.replaceState(null, "", window.location.pathname);
   }, [publish, myId, resetTo]);
 
+  const doSignIn = useCallback(() => {
+    signInWithGoogle().catch(() =>
+      showToast(tr(langRef.current, "signInFailed")),
+    );
+  }, [showToast]);
+  const doSignOut = useCallback(() => {
+    leaveOnline();
+    signOut().catch(() => {});
+  }, [leaveOnline]);
+
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     const hash = window.location.hash;
     if (hash.startsWith("#live=")) {
-      const room = hash.slice(6);
-      const saved = loadSession();
-      if (saved && saved.room === room)
-        connectRoom(room, saved.isHost, saved.nick, {
-          moves: saved.moves,
-          score: saved.score,
-          tcId: saved.tcId,
-        });
-      else setNickPrompt({ isHost: false, room });
+      // defer the join until we know the auth state (must be signed in to play)
+      pendingJoinRef.current = hash.slice(6);
       return;
     }
     if (hash.startsWith("#g=")) {
@@ -1175,6 +1287,35 @@ export default function ChessGame() {
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
 
+  // gated auto-join: only connect to a #live= game once the user is signed in
+  useEffect(() => {
+    const room = pendingJoinRef.current;
+    if (!room || onlineRef.current) return;
+    if (!profile) return; // wait until signed in
+    pendingJoinRef.current = "";
+    const nick = profile.nickname;
+    myNickRef.current = nick;
+    gameIdRef.current = room;
+    const saved = loadSession();
+    if (saved && saved.room === room) {
+      connectRoom(room, saved.isHost, nick, {
+        moves: saved.moves,
+        score: saved.score,
+        tcId: saved.tcId,
+      });
+    } else {
+      joinGame(room, { uid: profile.uid, nick, rating: profile.rating }).catch(
+        () => {},
+      );
+      connectRoom(room, false, nick);
+    }
+  }, [profile, connectRoom]);
+
+  // opened an invite while signed out (and auth has settled) → prompt Google sign-in
+  useEffect(() => {
+    if (authReady && !profile && pendingJoinRef.current) doSignIn();
+  }, [authReady, profile, doSignIn]);
+
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {
     const onHashChange = () => {
@@ -1191,16 +1332,23 @@ export default function ChessGame() {
         }
       }
       clearSession();
-      const nick =
-        (typeof window !== "undefined" &&
-          window.localStorage.getItem("chess-nick")) ||
-        myNickRef.current ||
-        randomNick();
+      if (!profile) {
+        // must be signed in to join a live game
+        pendingJoinRef.current = room;
+        showToast(tr(langRef.current, "signInToPlay"));
+        doSignIn();
+        return;
+      }
+      const nick = profile.nickname;
+      gameIdRef.current = room;
+      joinGame(room, { uid: profile.uid, nick, rating: profile.rating }).catch(
+        () => {},
+      );
       setTimeout(() => connectRoom(room, false, nick), 300);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [publish, myId, connectRoom]);
+  }, [publish, myId, connectRoom, profile, showToast, doSignIn]);
 
   useEffect(
     () => () => {
@@ -1220,6 +1368,23 @@ export default function ChessGame() {
     }, 60);
     return () => clearTimeout(id);
   }, [turn, mode, aiSide, gameOver, locked, difficulty, online, makeMove]);
+
+  useEffect(() => {
+    if (
+      !gameOver ||
+      !result ||
+      !online ||
+      online.role === "spec" ||
+      !gameIdRef.current ||
+      !ratedRef.current
+    )
+      return;
+    applyRating(
+      gameIdRef.current,
+      online.role,
+      result as unknown as FbResult,
+    ).catch(() => {});
+  }, [gameOver, result, online]);
 
   const newGame = useCallback(() => {
     if (onlineRef.current) {
@@ -1397,6 +1562,12 @@ export default function ChessGame() {
     } catch {
       /* noop */
     }
+    if (profile) setNickname(profile.uid, n).catch(() => {}); // ← persist to the account
+    try {
+      window.localStorage.setItem("chess-nick", n);
+    } catch {
+      /* noop */
+    }
     const r = rosterRef.current;
     if (r.white.id === myId) r.white = { ...r.white, nick: n };
     else if (r.black && r.black.id === myId) r.black = { ...r.black, nick: n };
@@ -1406,7 +1577,7 @@ export default function ChessGame() {
         : o,
     );
     publish({ t: "nick", id: myId, nick: n });
-  }, [nickDraft, publish, myId]);
+  }, [nickDraft, publish, myId, profile]);
 
   const legalFor = useCallback((r: number, c: number): Move[] => {
     const g = engineRef.current;
@@ -1471,6 +1642,9 @@ export default function ChessGame() {
     return (
       <div className={"player" + (active ? " active" : "")}>
         <span className={"turn-dot " + c} />
+        {online && online.role === c && profile && (
+          <span className="prating">{profile.rating}</span>
+        )}
         {isMe && editingNick ? (
           <input
             className="pname-edit"
@@ -1562,20 +1736,13 @@ export default function ChessGame() {
 
   return (
     <div className={"app" + (online ? " with-chat" : "")}>
-      <div className="lang-toggle">
-        <button
-          className={lang === "en" ? "on" : ""}
-          onClick={() => setLang("en")}
-        >
-          EN
-        </button>
-        <button
-          className={lang === "fr" ? "on" : ""}
-          onClick={() => setLang("fr")}
-        >
-          FR
-        </button>
-      </div>
+      <Navbar
+        profile={profile}
+        lang={lang}
+        onSignIn={doSignIn}
+        onSignOut={doSignOut}
+        onLang={setLang}
+      />
 
       {online && <Chat lang={lang} chat={chat} onSend={sendChat} />}
 
@@ -1620,6 +1787,7 @@ export default function ChessGame() {
         rematch={rematch}
         onInvite={startHost}
         onLeaveOnline={leaveOnline}
+        canPlayOnline={!!profile}
         onRematchAccept={acceptRematch}
         onRematchDecline={declineRematch}
         onResign={resign}

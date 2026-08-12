@@ -44,6 +44,7 @@ interface SidePanelProps {
   online: OnlineState;
   rematch: Rematch;
   onInvite: () => void;
+  canPlayOnline: boolean;
   onLeaveOnline: () => void;
   onRematchAccept: () => void;
   onRematchDecline: () => void;
@@ -348,8 +349,12 @@ export default function SidePanel(p: SidePanelProps) {
           </button>
         )}
         {!online && (
-          <button className="wide invite" onClick={p.onInvite}>
-            {t("playLive")}
+          <button
+            className="wide invite"
+            disabled={!p.canPlayOnline}
+            onClick={p.onInvite}
+          >
+            {p.canPlayOnline ? t("playLive") : t("signInToPlay")}
           </button>
         )}
         <button onClick={toggleFullscreen}>{t("fullscreen")}</button>

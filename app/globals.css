@@ -153,30 +153,6 @@ body {
   box-shadow: inset 0 0 0 0.9cqi rgba(20, 60, 20, 0.28);
 }
 
-.coord {
-  position: absolute;
-  z-index: 4;
-  font-size: 2.6cqi;
-  font-weight: 700;
-  line-height: 1;
-  opacity: 0.85;
-  pointer-events: none;
-}
-.coord.f {
-  right: 3px;
-  bottom: 2px;
-}
-.coord.r {
-  left: 3px;
-  top: 2px;
-}
-.sq.l .coord {
-  color: var(--dark);
-}
-.sq.d .coord {
-  color: var(--light);
-}
-
 .ghost {
   position: fixed;
   z-index: 50;
@@ -676,10 +652,6 @@ body {
 
 /* language toggle (top right) */
 .lang-toggle {
-  position: fixed;
-  top: 14px;
-  right: 14px;
-  z-index: 70;
   display: flex;
   gap: 3px;
   padding: 3px;
@@ -737,10 +709,6 @@ body {
 @media (max-width: 760px) {
   .board-stack {
     max-width: min(96vw, 520px);
-  }
-  .lang-toggle {
-    top: 8px;
-    right: 8px;
   }
 }
 
@@ -1515,78 +1483,6 @@ body {
   overflow: visible;
 }
 
-/* ===== right-click annotations (chess.com style) ===== */
-.sq.hi::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(235, 66, 55, 0.5);
-  pointer-events: none;
-  z-index: 1;
-}
-.sq .piece,
-.sq .coord,
-.sq .dot,
-.sq .ring {
-  position: relative;
-  z-index: 2;
-}
-.annot-arrows {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 4;
-  overflow: visible;
-}
-
-/* ===== coordinates outside the board ===== */
-.board-frame {
-  position: relative;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0 0 16px 16px;
-  margin: 0 auto;
-}
-.board-stack .board-frame {
-  max-width: 100%;
-}
-.board-frame .board-wrap {
-  width: 100%;
-  max-width: 100%;
-}
-.board-frame .ranks {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 16px;
-  width: 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-  align-items: center;
-  pointer-events: none;
-}
-.board-frame .files {
-  position: absolute;
-  left: 16px;
-  right: 0;
-  bottom: 0;
-  height: 16px;
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  pointer-events: none;
-}
-.board-frame .ranks span,
-.board-frame .files span {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--muted);
-  line-height: 1;
-}
-
 /* ===== capture hint: red ring on the enemy PIECE ===== */
 .piece.capturable {
   border-radius: 50%;
@@ -1607,4 +1503,11 @@ body {
 .ping-bars span {
   width: 3px;
   border-radius: 1px;
+}
+
+.prating {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 6px;
 }
