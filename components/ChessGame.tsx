@@ -39,6 +39,7 @@ import {
   applyRating,
   GameResult as FbResult,
 } from "@/lib/gameStore";
+import Confetti from "./Confetti";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
@@ -391,6 +392,7 @@ export default function ChessGame() {
     y: number;
     label: string;
   } | null>(null);
+  const [confetti, setConfetti] = useState(0);
 
   useEffect(() => {
     historyRef.current = history;
@@ -492,6 +494,18 @@ export default function ChessGame() {
       unsubAuth();
     };
   }, []);
+
+  useEffect(() => {
+    if (!gameOver || !result) return;
+    if (result.kind === "draw" || result.kind === "stalemate") return;
+    // did *I* win?
+    const iWon = online
+      ? online.role !== "spec" && result.winner === online.role
+      : mode === "ai"
+        ? result.winner !== aiSide
+        : false; // local 2-player: no single "me", skip confetti (or handle as you like)
+    if (iWon) setConfetti(Date.now());
+  }, [gameOver, result, online, mode, aiSide]);
 
   const publish = useCallback(
     (msg: Outgoing) => {
@@ -1743,6 +1757,8 @@ export default function ChessGame() {
         onSignOut={doSignOut}
         onLang={setLang}
       />
+
+      <Confetti fire={confetti} />
 
       {online && <Chat lang={lang} chat={chat} onSend={sendChat} />}
 
