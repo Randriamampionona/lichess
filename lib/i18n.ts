@@ -100,6 +100,9 @@ const en = {
   signOut: "Sign out",
   signInToPlay: "Sign in to play online",
   signInFailed: "Sign-in failed — try again",
+  gameOverTitle: "Game over",
+  won: "won",
+  home: "Home",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -204,6 +207,9 @@ const fr: Record<TKey, string> = {
   signOut: "Se déconnecter",
   signInToPlay: "Connectez-vous pour jouer en ligne",
   signInFailed: "Échec de la connexion — réessayez",
+  gameOverTitle: "Partie terminée",
+  won: "a gagné",
+  home: "Accueil",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };

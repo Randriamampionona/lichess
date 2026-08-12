@@ -37,7 +37,10 @@ import {
   createGame,
   joinGame,
   applyRating,
+  setResult as setGameResult, // ← aliased to avoid clashing with the useState setter
+  subscribeGame,
   GameResult as FbResult,
+  GameDoc,
 } from "@/lib/gameStore";
 import Confetti from "./Confetti";
 
@@ -393,6 +396,11 @@ export default function ChessGame() {
     label: string;
   } | null>(null);
   const [confetti, setConfetti] = useState(0);
+  const [finishedGame, setFinishedGame] = useState<null | {
+    result: FbResult;
+    white: { nick: string; rating: number } | null;
+    black: { nick: string; rating: number } | null;
+  }>(null);
 
   useEffect(() => {
     historyRef.current = history;
@@ -1301,29 +1309,56 @@ export default function ChessGame() {
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
 
-  // gated auto-join: only connect to a #live= game once the user is signed in
+  // gated auto-join: only connect to a #live= game once signed in AND the game isn't finished
   useEffect(() => {
     const room = pendingJoinRef.current;
-    if (!room || onlineRef.current) return;
+    if (!room || onlineRef.current || finishedGame) return;
     if (!profile) return; // wait until signed in
-    pendingJoinRef.current = "";
-    const nick = profile.nickname;
-    myNickRef.current = nick;
-    gameIdRef.current = room;
-    const saved = loadSession();
-    if (saved && saved.room === room) {
-      connectRoom(room, saved.isHost, nick, {
-        moves: saved.moves,
-        score: saved.score,
-        tcId: saved.tcId,
-      });
-    } else {
-      joinGame(room, { uid: profile.uid, nick, rating: profile.rating }).catch(
-        () => {},
-      );
-      connectRoom(room, false, nick);
-    }
-  }, [profile, connectRoom]);
+    let cancelled = false;
+
+    // peek at the game doc first
+    const unsub = subscribeGame(room, (g: GameDoc | null) => {
+      if (cancelled) return;
+
+      // finished (or missing) → show read-only stats, do NOT connect
+      if (g && g.status === "finished" && g.result) {
+        pendingJoinRef.current = "";
+        setFinishedGame({ result: g.result, white: g.white, black: g.black });
+        unsub();
+        return;
+      }
+
+      // still open → join once, then stop peeking
+      if (g && g.status !== "finished") {
+        pendingJoinRef.current = "";
+        unsub();
+        const nick = profile.nickname;
+        myNickRef.current = nick;
+        gameIdRef.current = room;
+        const saved = loadSession();
+        if (saved && saved.room === room) {
+          connectRoom(room, saved.isHost, nick, {
+            moves: saved.moves,
+            score: saved.score,
+            tcId: saved.tcId,
+          });
+        } else {
+          joinGame(room, {
+            uid: profile.uid,
+            nick,
+            rating: profile.rating,
+          }).catch(() => {});
+          connectRoom(room, false, nick);
+        }
+      }
+      // g === null (doc doesn't exist yet, e.g. host still creating) → keep waiting for next snapshot
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [profile, connectRoom, finishedGame]);
 
   // opened an invite while signed out (and auth has settled) → send them to the login page
   useEffect(() => {
@@ -1394,6 +1429,9 @@ export default function ChessGame() {
       !ratedRef.current
     )
       return;
+    setGameResult(gameIdRef.current, result as unknown as FbResult).catch(
+      () => {},
+    ); // ← mark finished (Firestore)
     applyRating(
       gameIdRef.current,
       online.role,
@@ -1943,6 +1981,57 @@ export default function ChessGame() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* expired / finished game (opened via link) */}
+      {finishedGame && (
+        <div className="modal-overlay">
+          <div className="modal draw">
+            <div className="modal-title" style={{ fontSize: 24 }}>
+              {tr(lang, "gameOverTitle")}
+            </div>
+            <div className="modal-sub">
+              {finishedGame.result.kind === "draw" ||
+              finishedGame.result.kind === "stalemate"
+                ? tr(lang, "draw")
+                : `${(finishedGame.result.winner === "w" ? finishedGame.white?.nick : finishedGame.black?.nick) || tr(lang, finishedGame.result.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`}
+            </div>
+            <div
+              className="modal-score"
+              style={{ flexDirection: "column", gap: 4, fontSize: 15 }}
+            >
+              <span>
+                <span className="turn-dot w" />{" "}
+                {finishedGame.white?.nick ?? "—"} ·{" "}
+                {finishedGame.white?.rating ?? "—"}
+              </span>
+              <span>
+                <span className="turn-dot b" />{" "}
+                {finishedGame.black?.nick ?? "—"} ·{" "}
+                {finishedGame.black?.rating ?? "—"}
+              </span>
+            </div>
+            <div className="modal-btns">
+              <button
+                className="primary"
+                onClick={() => {
+                  setFinishedGame(null);
+                  leaveOnline();
+                  startHost();
+                }}
+              >
+                {tr(lang, "newGame")}
+              </button>
+              <button
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+              >
+                {tr(lang, "home")}
+              </button>
+            </div>
           </div>
         </div>
       )}
