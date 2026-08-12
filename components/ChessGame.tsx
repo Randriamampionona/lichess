@@ -1325,10 +1325,13 @@ export default function ChessGame() {
     }
   }, [profile, connectRoom]);
 
-  // opened an invite while signed out (and auth has settled) → prompt Google sign-in
+  // opened an invite while signed out (and auth has settled) → send them to the login page
   useEffect(() => {
-    if (authReady && !profile && pendingJoinRef.current) doSignIn();
-  }, [authReady, profile, doSignIn]);
+    if (authReady && !profile && pendingJoinRef.current) {
+      const back = window.location.pathname + `#live=${pendingJoinRef.current}`;
+      window.location.href = `/login?next=${encodeURIComponent(back)}`;
+    }
+  }, [authReady, profile]);
 
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {
@@ -1347,10 +1350,8 @@ export default function ChessGame() {
       }
       clearSession();
       if (!profile) {
-        // must be signed in to join a live game
-        pendingJoinRef.current = room;
-        showToast(tr(langRef.current, "signInToPlay"));
-        doSignIn();
+        const back = window.location.pathname + `#live=${room}`;
+        window.location.href = `/login?next=${encodeURIComponent(back)}`;
         return;
       }
       const nick = profile.nickname;
@@ -1362,7 +1363,7 @@ export default function ChessGame() {
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [publish, myId, connectRoom, profile, showToast, doSignIn]);
+  }, [publish, myId, connectRoom, profile]);
 
   useEffect(
     () => () => {
