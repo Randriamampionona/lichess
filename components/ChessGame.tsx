@@ -1402,12 +1402,22 @@ export default function ChessGame() {
         window.location.href = `/login?next=${encodeURIComponent(back)}`;
         return;
       }
-      const nick = profile.nickname;
-      gameIdRef.current = room;
-      joinGame(room, { uid: profile.uid, nick, rating: profile.rating }).catch(
-        () => {},
-      );
-      setTimeout(() => connectRoom(room, false, nick), 300);
+      // check if that game is already finished before joining
+      const unsubPeek = subscribeGame(room, (g: GameDoc | null) => {
+        unsubPeek();
+        if (g && g.status === "finished" && g.result) {
+          setFinishedGame({ result: g.result, white: g.white, black: g.black });
+          return;
+        }
+        const nick = profile.nickname;
+        gameIdRef.current = room;
+        joinGame(room, {
+          uid: profile.uid,
+          nick,
+          rating: profile.rating,
+        }).catch(() => {});
+        connectRoom(room, false, nick);
+      });
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -2051,6 +2061,55 @@ export default function ChessGame() {
 
       {peerAway && !gameOver && online?.status === "connected" && (
         <div className="reconnect-note">⟳ {tr(lang, "oppReconnecting")}</div>
+      )}
+
+      {/* finished / expired game opened via link */}
+      {finishedGame && (
+        <div className="modal-overlay">
+          <div className="modal draw">
+            <div className="modal-title" style={{ fontSize: 24 }}>
+              {tr(lang, "gameOverTitle")}
+            </div>
+            <div className="modal-sub">
+              {finishedGame.result.kind === "draw" ||
+              finishedGame.result.kind === "stalemate"
+                ? tr(lang, "draw")
+                : `${(finishedGame.result.winner === "w" ? finishedGame.white?.nick : finishedGame.black?.nick) || tr(lang, finishedGame.result.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`}
+            </div>
+            <div
+              className="modal-score"
+              style={{ flexDirection: "column", gap: 4, fontSize: 15 }}
+            >
+              <span>
+                <span className="turn-dot w" />{" "}
+                {finishedGame.white?.nick ?? "—"} ·{" "}
+                {finishedGame.white?.rating ?? "—"}
+              </span>
+              <span>
+                <span className="turn-dot b" />{" "}
+                {finishedGame.black?.nick ?? "—"} ·{" "}
+                {finishedGame.black?.rating ?? "—"}
+              </span>
+            </div>
+            <div className="modal-btns">
+              <button
+                className="primary"
+                onClick={() => {
+                  window.location.href = window.location.pathname;
+                }}
+              >
+                {tr(lang, "newGame")}
+              </button>
+              <button
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+              >
+                {tr(lang, "home")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {toast && <div className="toast">{toast}</div>}
