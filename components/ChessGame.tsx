@@ -1230,7 +1230,7 @@ export default function ChessGame() {
       onlineRef.current &&
       onlineRef.current.role !== "spec"
     ) {
-      const winner = onlineRef.current.role === "w" ? "b" : "w"; // leaver forfeits
+      const winner = onlineRef.current.role === "w" ? "b" : "w"; // ← opponent wins
       setGameResult(gameIdRef.current, {
         kind: "abandon",
         winner,
@@ -2008,63 +2008,12 @@ export default function ChessGame() {
         </div>
       )}
 
-      {/* expired / finished game (opened via link) */}
-      {finishedGame && (
-        <div className="modal-overlay">
-          <div className="modal draw">
-            <div className="modal-title" style={{ fontSize: 24 }}>
-              {tr(lang, "gameOverTitle")}
-            </div>
-            <div className="modal-sub">
-              {finishedGame.result.kind === "draw" ||
-              finishedGame.result.kind === "stalemate"
-                ? tr(lang, "draw")
-                : `${(finishedGame.result.winner === "w" ? finishedGame.white?.nick : finishedGame.black?.nick) || tr(lang, finishedGame.result.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`}
-            </div>
-            <div
-              className="modal-score"
-              style={{ flexDirection: "column", gap: 4, fontSize: 15 }}
-            >
-              <span>
-                <span className="turn-dot w" />{" "}
-                {finishedGame.white?.nick ?? "—"} ·{" "}
-                {finishedGame.white?.rating ?? "—"}
-              </span>
-              <span>
-                <span className="turn-dot b" />{" "}
-                {finishedGame.black?.nick ?? "—"} ·{" "}
-                {finishedGame.black?.rating ?? "—"}
-              </span>
-            </div>
-            <div className="modal-btns">
-              <button
-                className="primary"
-                onClick={() => {
-                  setFinishedGame(null);
-                  leaveOnline();
-                  startHost();
-                }}
-              >
-                {tr(lang, "newGame")}
-              </button>
-              <button
-                onClick={() => {
-                  window.location.href = "/";
-                }}
-              >
-                {tr(lang, "home")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {peerAway && !gameOver && online?.status === "connected" && (
         <div className="reconnect-note">⟳ {tr(lang, "oppReconnecting")}</div>
       )}
 
       {/* finished / expired game opened via link */}
-      {finishedGame && (
+      {finishedGame && authReady && (
         <div className="modal-overlay">
           <div
             className={
@@ -2079,7 +2028,7 @@ export default function ChessGame() {
                       ? "b"
                       : null;
                 if (!myColor) return "win";
-                return r.winner === myColor ? "win" : "lose";
+                return r.winner === myColor ? "lose" : "win"; // flipped
               })()
             }
           >
@@ -2099,8 +2048,8 @@ export default function ChessGame() {
                       : null;
                 if (myColor) {
                   return r.winner === myColor
-                    ? tr(lang, "youWin")
-                    : tr(lang, "youLose");
+                    ? tr(lang, "youLose") // flipped
+                    : tr(lang, "youWin"); // flipped
                 }
                 const winnerNick =
                   r.winner === "w"
