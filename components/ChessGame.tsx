@@ -1224,6 +1224,19 @@ export default function ChessGame() {
   }, [profile, showToast]);
 
   const leaveOnline = useCallback(() => {
+    // if I'm a player in a live game that isn't finished, close it so the link can't be re-entered broken
+    if (
+      gameIdRef.current &&
+      onlineRef.current &&
+      onlineRef.current.role !== "spec"
+    ) {
+      const winner = onlineRef.current.role === "w" ? "b" : "w"; // leaver forfeits
+      setGameResult(gameIdRef.current, {
+        kind: "abandon",
+        winner,
+      } as unknown as FbResult).catch(() => {});
+    }
+
     if (pendingLeaveRef.current) {
       clearTimeout(pendingLeaveRef.current);
       pendingLeaveRef.current = undefined;

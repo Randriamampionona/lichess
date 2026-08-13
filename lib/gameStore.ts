@@ -76,9 +76,13 @@ export async function joinGame(
     const s = await tx.get(ref);
     if (!s.exists()) throw new Error("game-not-found");
     const g = s.data() as GameDoc;
+
+    if (g.status === "finished") return "spectator"; // Guards against "finished"
     if (g.white?.uid === me.uid) return "w";
     if (g.black?.uid === me.uid) return "b";
-    if (!g.black && g.status !== "finished") {
+
+    // Cleaned up line below (removed `&& g.status !== "finished"`):
+    if (!g.black) {
       tx.update(ref, {
         black: { uid: me.uid, nick: me.nick, rating: me.rating },
         status: "active",
@@ -86,6 +90,7 @@ export async function joinGame(
       });
       return "b";
     }
+
     tx.update(ref, { spectatorCount: increment(1) });
     return "spectator";
   });

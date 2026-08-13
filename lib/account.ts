@@ -4,6 +4,7 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged,
   User,
+  signInWithRedirect,
 } from "firebase/auth";
 import {
   doc,
@@ -33,8 +34,14 @@ export function watchAuth(cb: (u: User | null) => void) {
 }
 
 export async function signInWithGoogle(): Promise<User> {
-  const res = await signInWithPopup(auth, provider);
-  return res.user;
+  try {
+    const res = await signInWithPopup(auth, provider);
+    return res.user;
+  } catch (e) {
+    // Brave/mobile often block the popup → full-page redirect works
+    await signInWithRedirect(auth, provider);
+    return new Promise<User>(() => {}); // page navigates away
+  }
 }
 
 export async function signOut(): Promise<void> {
