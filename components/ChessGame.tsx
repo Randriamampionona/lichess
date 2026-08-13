@@ -398,8 +398,8 @@ export default function ChessGame() {
   const [confetti, setConfetti] = useState(0);
   const [finishedGame, setFinishedGame] = useState<null | {
     result: FbResult;
-    white: { nick: string; rating: number } | null;
-    black: { nick: string; rating: number } | null;
+    white: { uid: string; nick: string; rating: number } | null;
+    black: { uid: string; nick: string; rating: number } | null;
   }>(null);
 
   useEffect(() => {
@@ -2066,15 +2066,48 @@ export default function ChessGame() {
       {/* finished / expired game opened via link */}
       {finishedGame && (
         <div className="modal-overlay">
-          <div className="modal draw">
+          <div
+            className={
+              "modal " +
+              (() => {
+                const r = finishedGame.result;
+                if (r.kind === "draw" || r.kind === "stalemate") return "draw";
+                const myColor =
+                  finishedGame.white?.uid === profile?.uid
+                    ? "w"
+                    : finishedGame.black?.uid === profile?.uid
+                      ? "b"
+                      : null;
+                if (!myColor) return "win";
+                return r.winner === myColor ? "win" : "lose";
+              })()
+            }
+          >
             <div className="modal-title" style={{ fontSize: 24 }}>
               {tr(lang, "gameOverTitle")}
             </div>
             <div className="modal-sub">
-              {finishedGame.result.kind === "draw" ||
-              finishedGame.result.kind === "stalemate"
-                ? tr(lang, "draw")
-                : `${(finishedGame.result.winner === "w" ? finishedGame.white?.nick : finishedGame.black?.nick) || tr(lang, finishedGame.result.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`}
+              {(() => {
+                const r = finishedGame.result;
+                if (r.kind === "draw" || r.kind === "stalemate")
+                  return tr(lang, "draw");
+                const myColor =
+                  finishedGame.white?.uid === profile?.uid
+                    ? "w"
+                    : finishedGame.black?.uid === profile?.uid
+                      ? "b"
+                      : null;
+                if (myColor) {
+                  return r.winner === myColor
+                    ? tr(lang, "youWin")
+                    : tr(lang, "youLose");
+                }
+                const winnerNick =
+                  r.winner === "w"
+                    ? finishedGame.white?.nick
+                    : finishedGame.black?.nick;
+                return `${winnerNick || tr(lang, r.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`;
+              })()}
             </div>
             <div
               className="modal-score"
