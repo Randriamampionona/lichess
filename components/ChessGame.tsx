@@ -37,12 +37,8 @@ import {
   createGame,
   joinGame,
   applyRating,
-  setResult as setGameResult, // ← aliased to avoid clashing with the useState setter
-  subscribeGame,
   GameResult as FbResult,
-  GameDoc,
 } from "@/lib/gameStore";
-import Confetti from "./Confetti";
 
 const VAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const FULL: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
@@ -120,6 +116,7 @@ type Msg =
   | { t: "takeback-accept"; s: string }
   | { t: "takeback-decline"; s: string }
   | { t: "rematch-accept"; s: string }
+  | { t: "rematch-game"; s: string; gameId: string }
   | { t: "rematch-decline"; s: string }
   | { t: "resign"; s: string }
   | { t: "resign-accept"; s: string; winner: Color }
@@ -166,6 +163,7 @@ type Outgoing =
   | { t: "takeback-accept" }
   | { t: "takeback-decline" }
   | { t: "rematch-accept" }
+  | { t: "rematch-game"; gameId: string }
   | { t: "rematch-decline" }
   | { t: "resign" }
   | { t: "resign-accept"; winner: Color }
@@ -328,7 +326,6 @@ export default function ChessGame() {
   const watchdogPrevRef = useRef(0);
   const leftFiredRef = useRef<Record<string, boolean>>({});
   const takebackUsedRef = useRef(0);
-  const pendingJoinRef = useRef<string>("");
   const pendingLeaveRef = useRef<number | undefined>(undefined);
   const pendingLeaveIdRef = useRef<string | null>(null);
 
@@ -386,25 +383,24 @@ export default function ChessGame() {
     w: null,
     b: null,
   });
-  const [authReady, setAuthReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const gameIdRef = useRef<string>(""); // Firestore game id (also used as the MQTT room)
   const ratedRef = useRef(true);
+  const profileRef = useRef<Profile | null>(null);
+  const startRematchGameRef = useRef<() => void>(() => {});
+  const didCreateRematchRef = useRef(false);
   const [remoteCursor, setRemoteCursor] = useState<{
     x: number;
     y: number;
     label: string;
   } | null>(null);
-  const [confetti, setConfetti] = useState(0);
-  const [finishedGame, setFinishedGame] = useState<null | {
-    result: FbResult;
-    white: { uid: string; nick: string; rating: number } | null;
-    black: { uid: string; nick: string; rating: number } | null;
-  }>(null);
 
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
+  useEffect(() => {
+    profileRef.current = profile;
+  }, [profile]);
   useEffect(() => {
     scoreRef.current = score;
   }, [score]);
@@ -474,7 +470,6 @@ export default function ChessGame() {
       unsubProfile = undefined;
       if (!u) {
         setProfile(null);
-        setAuthReady(true);
         return;
       }
       const p = await ensureProfile(
@@ -484,7 +479,6 @@ export default function ChessGame() {
       );
       setProfile(p);
       myNickRef.current = p.nickname;
-      setAuthReady(true);
       try {
         localStorage.setItem("chess-nick", p.nickname);
       } catch {
@@ -503,18 +497,6 @@ export default function ChessGame() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!gameOver || !result) return;
-    if (result.kind === "draw" || result.kind === "stalemate") return;
-    // did *I* win?
-    const iWon = online
-      ? online.role !== "spec" && result.winner === online.role
-      : mode === "ai"
-        ? result.winner !== aiSide
-        : false; // local 2-player: no single "me", skip confetti (or handle as you like)
-    if (iWon) setConfetti(Date.now());
-  }, [gameOver, result, online, mode, aiSide]);
-
   const publish = useCallback(
     (msg: Outgoing) => {
       const c = clientRef.current;
@@ -525,24 +507,6 @@ export default function ChessGame() {
     },
     [myId],
   );
-
-  // keep the live board name in sync when the profile nickname changes (e.g. renamed from the navbar)
-  useEffect(() => {
-    if (!profile) return;
-    const n = profile.nickname;
-    myNickRef.current = n;
-    const on = onlineRef.current;
-    if (!on || on.role === "spec") return;
-    const r = rosterRef.current;
-    if (r.white.id === myId) r.white = { ...r.white, nick: n };
-    else if (r.black && r.black.id === myId) r.black = { ...r.black, nick: n };
-    setOnline((o) =>
-      o
-        ? { ...o, whiteNick: r.white.nick, blackNick: r.black?.nick ?? null }
-        : o,
-    );
-    if (on.status === "connected") publish({ t: "nick", id: myId, nick: n });
-  }, [profile, myId, publish]);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -1119,10 +1083,25 @@ export default function ChessGame() {
             resetTo([]);
             publish({ t: "rematch-accept" });
             setRematch("none");
-          } else setRematch("received");
+            startRematchGameRef.current();
+          } else {
+            didCreateRematchRef.current = false;
+            setRematch("received");
+          }
+        } else if (msg.t === "rematch-game") {
+          gameIdRef.current = msg.gameId;
+          const pr = profileRef.current;
+          if (pr && myRoleRef.current === "b") {
+            joinGame(msg.gameId, {
+              uid: pr.uid,
+              nick: myNickRef.current,
+              rating: pr.rating,
+            }).catch(() => {});
+          }
         } else if (msg.t === "rematch-accept") {
           resetTo([]);
           setRematch("none");
+          startRematchGameRef.current();
         } else if (msg.t === "rematch-decline") {
           setRematch("none");
           showToast(tr(langRef.current, "declined"));
@@ -1224,19 +1203,6 @@ export default function ChessGame() {
   }, [profile, showToast]);
 
   const leaveOnline = useCallback(() => {
-    // if I'm a player in a live game that isn't finished, close it so the link can't be re-entered broken
-    if (
-      gameIdRef.current &&
-      onlineRef.current &&
-      onlineRef.current.role !== "spec"
-    ) {
-      const winner = onlineRef.current.role === "w" ? "b" : "w"; // ← opponent wins
-      setGameResult(gameIdRef.current, {
-        kind: "abandon",
-        winner,
-      } as unknown as FbResult).catch(() => {});
-    }
-
     if (pendingLeaveRef.current) {
       clearTimeout(pendingLeaveRef.current);
       pendingLeaveRef.current = undefined;
@@ -1293,8 +1259,15 @@ export default function ChessGame() {
     startedRef.current = true;
     const hash = window.location.hash;
     if (hash.startsWith("#live=")) {
-      // defer the join until we know the auth state (must be signed in to play)
-      pendingJoinRef.current = hash.slice(6);
+      const room = hash.slice(6);
+      const saved = loadSession();
+      if (saved && saved.room === room)
+        connectRoom(room, saved.isHost, saved.nick, {
+          moves: saved.moves,
+          score: saved.score,
+          tcId: saved.tcId,
+        });
+      else setNickPrompt({ isHost: false, room });
       return;
     }
     if (hash.startsWith("#g=")) {
@@ -1322,65 +1295,6 @@ export default function ChessGame() {
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
 
-  // gated auto-join: only connect to a #live= game once signed in AND the game isn't finished
-  useEffect(() => {
-    const room = pendingJoinRef.current;
-    if (!room || onlineRef.current || finishedGame) return;
-    if (!profile) return; // wait until signed in
-    let cancelled = false;
-
-    // peek at the game doc first
-    const unsub = subscribeGame(room, (g: GameDoc | null) => {
-      if (cancelled) return;
-
-      // finished (or missing) → show read-only stats, do NOT connect
-      if (g && g.status === "finished" && g.result) {
-        pendingJoinRef.current = "";
-        setFinishedGame({ result: g.result, white: g.white, black: g.black });
-        unsub();
-        return;
-      }
-
-      // still open → join once, then stop peeking
-      if (g && g.status !== "finished") {
-        pendingJoinRef.current = "";
-        unsub();
-        const nick = profile.nickname;
-        myNickRef.current = nick;
-        gameIdRef.current = room;
-        const saved = loadSession();
-        if (saved && saved.room === room) {
-          connectRoom(room, saved.isHost, nick, {
-            moves: saved.moves,
-            score: saved.score,
-            tcId: saved.tcId,
-          });
-        } else {
-          joinGame(room, {
-            uid: profile.uid,
-            nick,
-            rating: profile.rating,
-          }).catch(() => {});
-          connectRoom(room, false, nick);
-        }
-      }
-      // g === null (doc doesn't exist yet, e.g. host still creating) → keep waiting for next snapshot
-    });
-
-    return () => {
-      cancelled = true;
-      unsub();
-    };
-  }, [profile, connectRoom, finishedGame]);
-
-  // opened an invite while signed out (and auth has settled) → send them to the login page
-  useEffect(() => {
-    if (authReady && !profile && pendingJoinRef.current) {
-      const back = window.location.pathname + `#live=${pendingJoinRef.current}`;
-      window.location.href = `/login?next=${encodeURIComponent(back)}`;
-    }
-  }, [authReady, profile]);
-
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {
     const onHashChange = () => {
@@ -1397,27 +1311,19 @@ export default function ChessGame() {
         }
       }
       clearSession();
-      if (!profile) {
-        const back = window.location.pathname + `#live=${room}`;
-        window.location.href = `/login?next=${encodeURIComponent(back)}`;
-        return;
-      }
-      // check if that game is already finished before joining
-      const unsubPeek = subscribeGame(room, (g: GameDoc | null) => {
-        unsubPeek();
-        if (g && g.status === "finished" && g.result) {
-          setFinishedGame({ result: g.result, white: g.white, black: g.black });
-          return;
-        }
-        const nick = profile.nickname;
-        gameIdRef.current = room;
+      const nick =
+        (typeof window !== "undefined" &&
+          window.localStorage.getItem("chess-nick")) ||
+        myNickRef.current ||
+        randomNick();
+      gameIdRef.current = room;
+      if (profile)
         joinGame(room, {
           uid: profile.uid,
           nick,
           rating: profile.rating,
         }).catch(() => {});
-        connectRoom(room, false, nick);
-      });
+      setTimeout(() => connectRoom(room, false, nick), 300);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -1442,6 +1348,27 @@ export default function ChessGame() {
     return () => clearTimeout(id);
   }, [turn, mode, aiSide, gameOver, locked, difficulty, online, makeMove]);
 
+  // create a fresh Firestore game for a rematch (white only) so ratings apply again
+  startRematchGameRef.current = () => {
+    if (myRoleRef.current !== "w") return;
+    if (didCreateRematchRef.current) return;
+    const pr = profileRef.current;
+    if (!pr || !ratedRef.current) return;
+    didCreateRematchRef.current = true;
+    createGame(
+      { uid: pr.uid, nick: myNickRef.current, rating: pr.rating },
+      tcIdRef.current,
+      ratedRef.current,
+    )
+      .then((id) => {
+        gameIdRef.current = id;
+        publish({ t: "rematch-game", gameId: id });
+      })
+      .catch(() => {
+        didCreateRematchRef.current = false;
+      });
+  };
+
   useEffect(() => {
     if (
       !gameOver ||
@@ -1452,9 +1379,6 @@ export default function ChessGame() {
       !ratedRef.current
     )
       return;
-    setGameResult(gameIdRef.current, result as unknown as FbResult).catch(
-      () => {},
-    ); // ← mark finished (Firestore)
     applyRating(
       gameIdRef.current,
       online.role,
@@ -1466,6 +1390,7 @@ export default function ChessGame() {
     if (onlineRef.current) {
       if (myRoleRef.current === "spec") return;
       if (onlineRef.current.status === "connected") {
+        didCreateRematchRef.current = false;
         publish({ t: "rematch" });
         setRematch("sent");
         return;
@@ -1482,6 +1407,7 @@ export default function ChessGame() {
     publish({ t: "rematch-accept" });
     resetTo([]);
     setRematch("none");
+    startRematchGameRef.current();
   }, [publish, resetTo]);
   const declineRematch = useCallback(() => {
     publish({ t: "rematch-decline" });
@@ -1820,8 +1746,6 @@ export default function ChessGame() {
         onLang={setLang}
       />
 
-      <Confetti fire={confetti} />
-
       {online && <Chat lang={lang} chat={chat} onSend={sendChat} />}
 
       <div className="board-area">
@@ -2010,88 +1934,6 @@ export default function ChessGame() {
 
       {peerAway && !gameOver && online?.status === "connected" && (
         <div className="reconnect-note">⟳ {tr(lang, "oppReconnecting")}</div>
-      )}
-
-      {/* finished / expired game opened via link */}
-      {finishedGame && authReady && (
-        <div className="modal-overlay">
-          <div
-            className={
-              "modal " +
-              (() => {
-                const r = finishedGame.result;
-                if (r.kind === "draw" || r.kind === "stalemate") return "draw";
-                const myColor =
-                  finishedGame.white?.uid === profile?.uid
-                    ? "w"
-                    : finishedGame.black?.uid === profile?.uid
-                      ? "b"
-                      : null;
-                if (!myColor) return "win";
-                return r.winner === myColor ? "lose" : "win"; // flipped
-              })()
-            }
-          >
-            <div className="modal-title" style={{ fontSize: 24 }}>
-              {tr(lang, "gameOverTitle")}
-            </div>
-            <div className="modal-sub">
-              {(() => {
-                const r = finishedGame.result;
-                if (r.kind === "draw" || r.kind === "stalemate")
-                  return tr(lang, "draw");
-                const myColor =
-                  finishedGame.white?.uid === profile?.uid
-                    ? "w"
-                    : finishedGame.black?.uid === profile?.uid
-                      ? "b"
-                      : null;
-                if (myColor) {
-                  return r.winner === myColor
-                    ? tr(lang, "youLose") // flipped
-                    : tr(lang, "youWin"); // flipped
-                }
-                const winnerNick =
-                  r.winner === "w"
-                    ? finishedGame.white?.nick
-                    : finishedGame.black?.nick;
-                return `${winnerNick || tr(lang, r.winner === "w" ? "white" : "black")} ${tr(lang, "won")}`;
-              })()}
-            </div>
-            <div
-              className="modal-score"
-              style={{ flexDirection: "column", gap: 4, fontSize: 15 }}
-            >
-              <span>
-                <span className="turn-dot w" />{" "}
-                {finishedGame.white?.nick ?? "—"} ·{" "}
-                {finishedGame.white?.rating ?? "—"}
-              </span>
-              <span>
-                <span className="turn-dot b" />{" "}
-                {finishedGame.black?.nick ?? "—"} ·{" "}
-                {finishedGame.black?.rating ?? "—"}
-              </span>
-            </div>
-            <div className="modal-btns">
-              <button
-                className="primary"
-                onClick={() => {
-                  window.location.href = window.location.pathname;
-                }}
-              >
-                {tr(lang, "newGame")}
-              </button>
-              <button
-                onClick={() => {
-                  window.location.href = "/";
-                }}
-              >
-                {tr(lang, "home")}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {toast && <div className="toast">{toast}</div>}
