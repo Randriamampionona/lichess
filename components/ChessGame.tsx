@@ -37,6 +37,8 @@ import {
   createGame,
   joinGame,
   applyRating,
+  setResult as setGameResult,
+  getGame,
   GameResult as FbResult,
 } from "@/lib/gameStore";
 
@@ -1203,6 +1205,19 @@ export default function ChessGame() {
   }, [profile, showToast]);
 
   const leaveOnline = useCallback(() => {
+    // leaving mid-game forfeits → mark the Firestore game finished (abandon)
+    if (
+      gameIdRef.current &&
+      onlineRef.current &&
+      onlineRef.current.role !== "spec" &&
+      !gameOverRef.current
+    ) {
+      const winner = onlineRef.current.role === "w" ? "b" : "w";
+      setGameResult(gameIdRef.current, {
+        kind: "abandon",
+        winner,
+      } as unknown as FbResult).catch(() => {});
+    }
     if (pendingLeaveRef.current) {
       clearTimeout(pendingLeaveRef.current);
       pendingLeaveRef.current = undefined;
@@ -1260,14 +1275,26 @@ export default function ChessGame() {
     const hash = window.location.hash;
     if (hash.startsWith("#live=")) {
       const room = hash.slice(6);
-      const saved = loadSession();
-      if (saved && saved.room === room)
-        connectRoom(room, saved.isHost, saved.nick, {
-          moves: saved.moves,
-          score: saved.score,
-          tcId: saved.tcId,
-        });
-      else setNickPrompt({ isHost: false, room });
+      const proceedLive = () => {
+        const saved = loadSession();
+        if (saved && saved.room === room)
+          connectRoom(room, saved.isHost, saved.nick, {
+            moves: saved.moves,
+            score: saved.score,
+            tcId: saved.tcId,
+          });
+        else setNickPrompt({ isHost: false, room });
+      };
+      // finished game → read-only review page instead of joining
+      getGame(room)
+        .then((g) => {
+          if (g && g.status === "finished") {
+            window.location.href = `/review/${room}`;
+            return;
+          }
+          proceedLive();
+        })
+        .catch(() => proceedLive());
       return;
     }
     if (hash.startsWith("#g=")) {
@@ -1316,14 +1343,25 @@ export default function ChessGame() {
           window.localStorage.getItem("chess-nick")) ||
         myNickRef.current ||
         randomNick();
-      gameIdRef.current = room;
-      if (profile)
-        joinGame(room, {
-          uid: profile.uid,
-          nick,
-          rating: profile.rating,
-        }).catch(() => {});
-      setTimeout(() => connectRoom(room, false, nick), 300);
+      const proceedJoin = () => {
+        gameIdRef.current = room;
+        if (profile)
+          joinGame(room, {
+            uid: profile.uid,
+            nick,
+            rating: profile.rating,
+          }).catch(() => {});
+        setTimeout(() => connectRoom(room, false, nick), 300);
+      };
+      getGame(room)
+        .then((g) => {
+          if (g && g.status === "finished") {
+            window.location.href = `/review/${room}`;
+            return;
+          }
+          proceedJoin();
+        })
+        .catch(() => proceedJoin());
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -1375,15 +1413,19 @@ export default function ChessGame() {
       !result ||
       !online ||
       online.role === "spec" ||
-      !gameIdRef.current ||
-      !ratedRef.current
+      !gameIdRef.current
     )
       return;
-    applyRating(
-      gameIdRef.current,
-      online.role,
-      result as unknown as FbResult,
-    ).catch(() => {});
+    // mark the game finished in Firestore so a revisited link is read-only
+    setGameResult(gameIdRef.current, result as unknown as FbResult).catch(
+      () => {},
+    );
+    if (ratedRef.current)
+      applyRating(
+        gameIdRef.current,
+        online.role,
+        result as unknown as FbResult,
+      ).catch(() => {});
   }, [gameOver, result, online]);
 
   const newGame = useCallback(() => {

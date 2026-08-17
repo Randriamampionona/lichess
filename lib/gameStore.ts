@@ -3,6 +3,7 @@ import {
   doc,
   addDoc,
   onSnapshot,
+  getDoc,
   updateDoc,
   runTransaction,
   serverTimestamp,
@@ -106,6 +107,12 @@ export function subscribeGame(gameId: string, cb: (g: GameDoc | null) => void) {
   return onSnapshot(doc(db, "games", gameId), (s) =>
     cb(s.exists() ? (s.data() as GameDoc) : null),
   );
+}
+
+/** One-shot fetch of a game doc (used by the review page / finished-link checks). */
+export async function getGame(gameId: string): Promise<GameDoc | null> {
+  const s = await getDoc(doc(db, "games", gameId));
+  return s.exists() ? (s.data() as GameDoc) : null;
 }
 
 export const setResult = (gameId: string, result: GameResult) =>
