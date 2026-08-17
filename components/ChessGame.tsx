@@ -291,6 +291,8 @@ export default function ChessGame() {
   const soundRef = useRef(true);
   const toastTimer = useRef<number | undefined>(undefined);
   const startedRef = useRef(false);
+  const startHostRef = useRef<() => void>(() => {});
+  const pendingNewRef = useRef(false);
 
   const clientRef = useRef<MqttClient | null>(null);
   const roomRef = useRef<string>("");
@@ -1203,6 +1205,7 @@ export default function ChessGame() {
     const room = Math.random().toString(36).slice(2, 8);
     setNickPrompt({ isHost: true, room });
   }, [profile, showToast]);
+  startHostRef.current = startHost;
 
   const leaveOnline = useCallback(() => {
     // leaving mid-game forfeits → mark the Firestore game finished (abandon)
@@ -1297,6 +1300,13 @@ export default function ChessGame() {
         .catch(() => proceedLive());
       return;
     }
+    if (hash.startsWith("#new=")) {
+      // came from the review page "New game" → host once auth (profile) is ready
+      window.history.replaceState(null, "", window.location.pathname);
+      pendingNewRef.current = true;
+      posCountsRef.current[engineRef.current.key()] = 1;
+      return;
+    }
     if (hash.startsWith("#g=")) {
       try {
         const { game, history: h } = decodeGame(
@@ -1321,6 +1331,13 @@ export default function ChessGame() {
     }
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
+
+  // fire the deferred "New game" host once the profile has loaded
+  useEffect(() => {
+    if (!pendingNewRef.current || !profile || onlineRef.current) return;
+    pendingNewRef.current = false;
+    startHostRef.current();
+  }, [profile]);
 
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {

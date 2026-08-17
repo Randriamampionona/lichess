@@ -57,7 +57,7 @@ export default function ReviewPage() {
               This game link is invalid or no longer available.
             </p>
             <div style={s.btns}>
-              <a href="/" style={s.primary}>
+              <a href="/#new=1" style={s.primary}>
                 New game
               </a>
               <a href="/" style={s.ghost}>
@@ -117,7 +117,7 @@ export default function ReviewPage() {
                 </div>
 
                 <div style={s.btns}>
-                  <a href="/" style={s.primary}>
+                  <a href="/#new=1" style={s.primary}>
                     New game
                   </a>
                   <a href="/" style={s.ghost}>
