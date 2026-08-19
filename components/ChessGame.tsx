@@ -100,7 +100,13 @@ type Roster = { white: Player; black: Player | null };
 
 type Msg =
   | { t: "join"; s: string; id: string; nick: string }
-  | { t: "roster"; s: string; white: Player; black: Player | null }
+  | {
+      t: "roster";
+      s: string;
+      white: Player;
+      black: Player | null;
+      hostColor: Color;
+    }
   | {
       t: "state";
       s: string;
@@ -148,7 +154,7 @@ type Msg =
 
 type Outgoing =
   | { t: "join"; id: string; nick: string }
-  | { t: "roster"; white: Player; black: Player | null }
+  | { t: "roster"; white: Player; black: Player | null; hostColor: Color }
   | {
       t: "state";
       moves: Move[];
@@ -291,8 +297,6 @@ export default function ChessGame() {
   const soundRef = useRef(true);
   const toastTimer = useRef<number | undefined>(undefined);
   const startedRef = useRef(false);
-  const startHostRef = useRef<() => void>(() => {});
-  const pendingNewRef = useRef(false);
 
   const clientRef = useRef<MqttClient | null>(null);
   const roomRef = useRef<string>("");
@@ -321,6 +325,7 @@ export default function ChessGame() {
   const myRoleRef = useRef<Role>("w");
   const myNickRef = useRef<string>("");
   const orientationRef = useRef<Color>("w");
+  const hostColorRef = useRef<Color>("w");
   const cursorSentRef = useRef(0);
   const cursorHideRef = useRef<number | undefined>(undefined);
   const isHostRef = useRef(false);
@@ -375,6 +380,7 @@ export default function ChessGame() {
     room: string;
   } | null>(null);
   const [nickInput, setNickInput] = useState("");
+  const [nickColor, setNickColor] = useState<"w" | "b" | "random">("w");
   const [editingNick, setEditingNick] = useState(false);
   const [nickDraft, setNickDraft] = useState("");
   const [resignIncoming, setResignIncoming] = useState(false);
@@ -528,22 +534,28 @@ export default function ChessGame() {
   const applyRoster = useCallback(
     (r: Roster) => {
       rosterRef.current = r;
+      const hc = hostColorRef.current;
+      const oppc: Color = hc === "w" ? "b" : "w";
+      // MQTT roster: host = white SLOT, guest = black SLOT (identity only).
+      // A player's CHESS color = host plays hostColor, guest plays the opposite.
       const role: Role =
         r.white.id === myId
-          ? "w"
+          ? hc
           : r.black && r.black.id === myId
-            ? "b"
+            ? oppc
             : "spec";
       myRoleRef.current = role;
       const ori: Color = role === "b" ? "b" : "w";
       setOrientation(ori);
       orientationRef.current = ori;
       const status: "waiting" | "connected" = r.black ? "connected" : "waiting";
+      const hostNick = r.white.nick;
+      const guestNick = r.black?.nick ?? null;
       setOnline({
         role,
         status,
-        whiteNick: r.white.nick,
-        blackNick: r.black?.nick ?? null,
+        whiteNick: hc === "w" ? hostNick : (guestNick ?? "…"),
+        blackNick: hc === "w" ? guestNick : hostNick,
       });
     },
     [myId],
@@ -814,6 +826,7 @@ export default function ChessGame() {
       isHost: boolean,
       nick: string,
       restore?: { moves: Move[]; score: { w: number; b: number }; tcId: TcId },
+      hostColor: Color = "w",
     ) => {
       const { default: mqtt } = await import("mqtt");
       clientRef.current?.end(true);
@@ -821,6 +834,7 @@ export default function ChessGame() {
       roomRef.current = room;
       myNickRef.current = nick;
       isHostRef.current = isHost;
+      if (isHost) hostColorRef.current = hostColor;
       lastSeenRef.current = {};
       leftFiredRef.current = {};
       setLeaverNick("");
@@ -914,7 +928,12 @@ export default function ChessGame() {
             if (!r.black && msg.id !== r.white.id)
               r.black = { id: msg.id, nick: msg.nick };
             applyRoster({ white: r.white, black: r.black });
-            publish({ t: "roster", white: r.white, black: r.black });
+            publish({
+              t: "roster",
+              white: r.white,
+              black: r.black,
+              hostColor: hostColorRef.current,
+            });
             publish({
               t: "state",
               moves: historyRef.current.map((h) => h.move),
@@ -931,8 +950,10 @@ export default function ChessGame() {
             pendingLeaveRef.current = undefined;
             pendingLeaveIdRef.current = null;
           }
-          if (rosterRef.current.white.id !== myId)
+          if (rosterRef.current.white.id !== myId) {
+            hostColorRef.current = msg.hostColor;
             applyRoster({ white: msg.white, black: msg.black });
+          }
         } else if (msg.t === "state") {
           const iAmHost = rosterRef.current.white.id === myId;
           if (!iAmHost && msg.score) setScore(msg.score);
@@ -982,11 +1003,14 @@ export default function ChessGame() {
           if (typeof msg.rtt === "number") {
             const rttVal = msg.rtt;
             const rr = rosterRef.current;
+            const hc2 = hostColorRef.current;
             const col =
               rr.white.id === msg.s
-                ? "w"
+                ? hc2
                 : rr.black && rr.black.id === msg.s
-                  ? "b"
+                  ? hc2 === "w"
+                    ? "b"
+                    : "w"
                   : null;
             if (col) setPing((pg) => ({ ...pg, [col]: rttVal }));
           }
@@ -1069,8 +1093,14 @@ export default function ChessGame() {
             o
               ? {
                   ...o,
-                  whiteNick: r.white.nick,
-                  blackNick: r.black?.nick ?? null,
+                  whiteNick:
+                    hostColorRef.current === "w"
+                      ? r.white.nick
+                      : (r.black?.nick ?? "…"),
+                  blackNick:
+                    hostColorRef.current === "w"
+                      ? (r.black?.nick ?? null)
+                      : r.white.nick,
                 }
               : o,
           );
@@ -1158,6 +1188,9 @@ export default function ChessGame() {
     myNickRef.current = nick;
 
     if (np.isHost) {
+      const hostColor: Color =
+        nickColor === "random" ? (Math.random() < 0.5 ? "w" : "b") : nickColor;
+      hostColorRef.current = hostColor;
       let id = np.room; // fallback if profile not ready yet
       if (profile) {
         try {
@@ -1165,13 +1198,14 @@ export default function ChessGame() {
             { uid: profile.uid, nick, rating: profile.rating },
             tcIdRef.current,
             ratedRef.current,
+            hostColor,
           );
         } catch {
           /* noop */
         }
       }
       gameIdRef.current = id;
-      connectRoom(id, true, nick); // MQTT room = Firestore game id ✅
+      connectRoom(id, true, nick, undefined, hostColor); // MQTT room = Firestore game id ✅
       const url = `${window.location.origin}${window.location.pathname}#live=${id}`;
       window.history.replaceState(null, "", `#live=${id}`);
       if (navigator.clipboard?.writeText)
@@ -1195,7 +1229,7 @@ export default function ChessGame() {
       }
       connectRoom(np.room, false, nick);
     }
-  }, [nickPrompt, nickInput, connectRoom, showToast, profile]);
+  }, [nickPrompt, nickInput, nickColor, connectRoom, showToast, profile]);
 
   const startHost = useCallback(() => {
     if (!profile) {
@@ -1205,7 +1239,6 @@ export default function ChessGame() {
     const room = Math.random().toString(36).slice(2, 8);
     setNickPrompt({ isHost: true, room });
   }, [profile, showToast]);
-  startHostRef.current = startHost;
 
   const leaveOnline = useCallback(() => {
     // leaving mid-game forfeits → mark the Firestore game finished (abandon)
@@ -1300,13 +1333,6 @@ export default function ChessGame() {
         .catch(() => proceedLive());
       return;
     }
-    if (hash.startsWith("#new=")) {
-      // came from the review page "New game" → host once auth (profile) is ready
-      window.history.replaceState(null, "", window.location.pathname);
-      pendingNewRef.current = true;
-      posCountsRef.current[engineRef.current.key()] = 1;
-      return;
-    }
     if (hash.startsWith("#g=")) {
       try {
         const { game, history: h } = decodeGame(
@@ -1331,13 +1357,6 @@ export default function ChessGame() {
     }
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
-
-  // fire the deferred "New game" host once the profile has loaded
-  useEffect(() => {
-    if (!pendingNewRef.current || !profile || onlineRef.current) return;
-    pendingNewRef.current = false;
-    startHostRef.current();
-  }, [profile]);
 
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {
@@ -1634,7 +1653,17 @@ export default function ChessGame() {
     else if (r.black && r.black.id === myId) r.black = { ...r.black, nick: n };
     setOnline((o) =>
       o
-        ? { ...o, whiteNick: r.white.nick, blackNick: r.black?.nick ?? null }
+        ? {
+            ...o,
+            whiteNick:
+              hostColorRef.current === "w"
+                ? r.white.nick
+                : (r.black?.nick ?? "…"),
+            blackNick:
+              hostColorRef.current === "w"
+                ? (r.black?.nick ?? null)
+                : r.white.nick,
+          }
         : o,
     );
     publish({ t: "nick", id: myId, nick: n });
@@ -1881,9 +1910,31 @@ export default function ChessGame() {
                 if (e.key === "Enter") confirmNick();
               }}
             />
+            {nickPrompt.isHost && (
+              <select
+                className="nick-input"
+                value={nickColor}
+                onChange={(e) =>
+                  setNickColor(e.target.value as "w" | "b" | "random")
+                }
+                style={{ cursor: "pointer" }}
+              >
+                <option value="w">{tr(lang, "playWhite")}</option>
+                <option value="b">{tr(lang, "playBlack")}</option>
+                <option value="random">{tr(lang, "playRandom")}</option>
+              </select>
+            )}
             <div className="modal-btns">
               <button className="primary" onClick={confirmNick}>
                 {nickPrompt.isHost ? tr(lang, "startBtn") : tr(lang, "joinBtn")}
+              </button>
+              <button
+                onClick={() => {
+                  setNickPrompt(null);
+                  setNickInput("");
+                }}
+              >
+                {tr(lang, "cancelBtn")}
               </button>
             </div>
           </div>

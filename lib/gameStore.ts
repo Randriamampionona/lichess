@@ -27,6 +27,7 @@ export type GameResult =
 export type GameDoc = {
   status: "waiting" | "active" | "finished";
   hostUid: string;
+  hostColor: Color;
   white: PlayerRef;
   black: PlayerRef;
   tcId: string;
@@ -45,12 +46,15 @@ export async function createGame(
   host: { uid: string; nick: string; rating: number },
   tcId: string,
   rated = true,
+  hostColor: Color = "w",
 ) {
+  const hp = { uid: host.uid, nick: host.nick, rating: host.rating };
   const ref = await addDoc(collection(db, "games"), {
     status: "waiting",
     hostUid: host.uid,
-    white: { uid: host.uid, nick: host.nick, rating: host.rating },
-    black: null,
+    hostColor,
+    white: hostColor === "w" ? hp : null,
+    black: hostColor === "b" ? hp : null,
     tcId,
     rated,
     moves: [],
@@ -78,14 +82,22 @@ export async function joinGame(
     if (!s.exists()) throw new Error("game-not-found");
     const g = s.data() as GameDoc;
 
-    if (g.status === "finished") return "spectator"; // Guards against "finished"
+    if (g.status === "finished") return "spectator";
     if (g.white?.uid === me.uid) return "w";
     if (g.black?.uid === me.uid) return "b";
 
-    // Cleaned up line below (removed `&& g.status !== "finished"`):
+    const meRef = { uid: me.uid, nick: me.nick, rating: me.rating };
+    if (!g.white) {
+      tx.update(ref, {
+        white: meRef,
+        status: "active",
+        updatedAt: serverTimestamp(),
+      });
+      return "w";
+    }
     if (!g.black) {
       tx.update(ref, {
-        black: { uid: me.uid, nick: me.nick, rating: me.rating },
+        black: meRef,
         status: "active",
         updatedAt: serverTimestamp(),
       });

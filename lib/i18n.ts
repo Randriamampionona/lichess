@@ -103,6 +103,13 @@ const en = {
   gameOverTitle: "Game over",
   won: "won",
   home: "Home",
+  cancelBtn: "Cancel",
+  copyLink: "Copy invite link",
+  linkCopied: "Link copied!",
+  shareInvite: "Share this link to invite your friend",
+  playWhite: "Play as White",
+  playBlack: "Play as Black",
+  playRandom: "Random color",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -210,6 +217,13 @@ const fr: Record<TKey, string> = {
   gameOverTitle: "Partie terminée",
   won: "a gagné",
   home: "Accueil",
+  cancelBtn: "Annuler",
+  copyLink: "Copier le lien d'invitation",
+  linkCopied: "Lien copié !",
+  shareInvite: "Partagez ce lien pour inviter votre ami",
+  playWhite: "Jouer les Blancs",
+  playBlack: "Jouer les Noirs",
+  playRandom: "Couleur aléatoire",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };
