@@ -110,6 +110,7 @@ const en = {
   playWhite: "Play as White",
   playBlack: "Play as Black",
   playRandom: "Random color",
+  resignedTitle: "Resignation",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -224,6 +225,7 @@ const fr: Record<TKey, string> = {
   playWhite: "Jouer les Blancs",
   playBlack: "Jouer les Noirs",
   playRandom: "Couleur aléatoire",
+  resignedTitle: "Abandon",
 };
 
 const DICT: Record<Lang, Record<TKey, string>> = { en, fr };

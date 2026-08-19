@@ -4,6 +4,7 @@ import {
   addDoc,
   onSnapshot,
   getDoc,
+  deleteDoc,
   updateDoc,
   runTransaction,
   serverTimestamp,
@@ -126,6 +127,10 @@ export async function getGame(gameId: string): Promise<GameDoc | null> {
   const s = await getDoc(doc(db, "games", gameId));
   return s.exists() ? (s.data() as GameDoc) : null;
 }
+
+/** Remove a game doc (host abandoning a game nobody joined). */
+export const deleteGame = (gameId: string) =>
+  deleteDoc(doc(db, "games", gameId)).catch(() => {});
 
 export const setResult = (gameId: string, result: GameResult) =>
   updateDoc(doc(db, "games", gameId), {

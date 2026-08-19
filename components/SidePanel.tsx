@@ -7,6 +7,7 @@ export type GameResult =
   | { kind: "checkmate"; winner: Color }
   | { kind: "timeout"; winner: Color }
   | { kind: "abandon"; winner: Color }
+  | { kind: "resign"; winner: Color }
   | { kind: "stalemate" }
   | { kind: "draw"; reason: "fifty" | "insufficient" | "threefold" };
 
@@ -96,6 +97,9 @@ export default function SidePanel(p: SidePanelProps) {
       sub = r.winner === "w" ? t("whiteWins") : t("blackWins");
     } else if (r.kind === "abandon") {
       title = t("opponentLeft");
+      sub = r.winner === "w" ? t("whiteWins") : t("blackWins");
+    } else if (r.kind === "resign") {
+      title = t("resignedTitle");
       sub = r.winner === "w" ? t("whiteWins") : t("blackWins");
     } else if (r.kind === "stalemate") {
       title = t("stalemate");

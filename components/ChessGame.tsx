@@ -38,6 +38,7 @@ import {
   joinGame,
   applyRating,
   setResult as setGameResult,
+  deleteGame,
   getGame,
   GameResult as FbResult,
 } from "@/lib/gameStore";
@@ -344,6 +345,8 @@ export default function ChessGame() {
   const countedRef = useRef(false);
   const turnRef = useRef<Color>("w");
   const gameOverRef = useRef(false);
+  const startHostRef = useRef<() => void>(() => {});
+  const pendingNewRef = useRef(false);
   const lockedRef = useRef(false);
 
   const [position, setPosition] = useState<BoardT>(() =>
@@ -380,6 +383,7 @@ export default function ChessGame() {
     room: string;
   } | null>(null);
   const [nickInput, setNickInput] = useState("");
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [nickColor, setNickColor] = useState<"w" | "b" | "random">("w");
   const [editingNick, setEditingNick] = useState(false);
   const [nickDraft, setNickDraft] = useState("");
@@ -569,7 +573,8 @@ export default function ChessGame() {
     if (
       r.kind === "checkmate" ||
       r.kind === "timeout" ||
-      r.kind === "abandon"
+      r.kind === "abandon" ||
+      r.kind === "resign"
     ) {
       const w = r.winner;
       setScore((s) => ({ ...s, [w]: s[w] + 1 }));
@@ -1107,8 +1112,7 @@ export default function ChessGame() {
         } else if (msg.t === "resign") {
           setResignIncoming(true);
         } else if (msg.t === "resign-accept") {
-          setScore((s) => ({ ...s, [msg.winner]: s[msg.winner] + 1 }));
-          resetTo([]);
+          finish({ kind: "resign", winner: msg.winner });
           showToast(tr(langRef.current, "lostByResign"));
         } else if (msg.t === "resign-decline") {
           showToast(tr(langRef.current, "declinedResign"));
@@ -1208,12 +1212,7 @@ export default function ChessGame() {
       connectRoom(id, true, nick, undefined, hostColor); // MQTT room = Firestore game id ✅
       const url = `${window.location.origin}${window.location.pathname}#live=${id}`;
       window.history.replaceState(null, "", `#live=${id}`);
-      if (navigator.clipboard?.writeText)
-        navigator.clipboard
-          .writeText(url)
-          .then(() => showToast(tr(langRef.current, "inviteCopied")))
-          .catch(() => showToast(url));
-      else showToast(url);
+      setInviteLink(url); // show the copy-link popup
     } else {
       gameIdRef.current = np.room;
       if (profile) {
@@ -1239,6 +1238,7 @@ export default function ChessGame() {
     const room = Math.random().toString(36).slice(2, 8);
     setNickPrompt({ isHost: true, room });
   }, [profile, showToast]);
+  startHostRef.current = startHost;
 
   const leaveOnline = useCallback(() => {
     // leaving mid-game forfeits → mark the Firestore game finished (abandon)
@@ -1248,11 +1248,23 @@ export default function ChessGame() {
       onlineRef.current.role !== "spec" &&
       !gameOverRef.current
     ) {
-      const winner = onlineRef.current.role === "w" ? "b" : "w";
-      setGameResult(gameIdRef.current, {
-        kind: "abandon",
-        winner,
-      } as unknown as FbResult).catch(() => {});
+      const gid = gameIdRef.current;
+      const meColor = onlineRef.current.role as Color;
+      if (onlineRef.current.status === "connected") {
+        // opponent present → forfeit: they win (+), I lose (−)
+        const winner: Color = meColor === "w" ? "b" : "w";
+        setGameResult(gid, {
+          kind: "abandon",
+          winner,
+        } as unknown as FbResult).catch(() => {});
+        applyRating(gid, meColor, {
+          kind: "abandon",
+          winner,
+        } as unknown as FbResult).catch(() => {});
+      } else {
+        // nobody joined yet → remove the game so the link is dead
+        deleteGame(gid).catch(() => {});
+      }
     }
     if (pendingLeaveRef.current) {
       clearTimeout(pendingLeaveRef.current);
@@ -1333,6 +1345,13 @@ export default function ChessGame() {
         .catch(() => proceedLive());
       return;
     }
+    if (hash.startsWith("#new=")) {
+      // "New game" from the review page → host once profile is ready
+      window.history.replaceState(null, "", window.location.pathname);
+      pendingNewRef.current = true;
+      posCountsRef.current[engineRef.current.key()] = 1;
+      return;
+    }
     if (hash.startsWith("#g=")) {
       try {
         const { game, history: h } = decodeGame(
@@ -1358,6 +1377,13 @@ export default function ChessGame() {
     posCountsRef.current[engineRef.current.key()] = 1;
   }, [refreshDerived, connectRoom]);
 
+  // fire the deferred "New game" host once the profile has loaded
+  useEffect(() => {
+    if (!pendingNewRef.current || !profile || onlineRef.current) return;
+    pendingNewRef.current = false;
+    startHostRef.current();
+  }, [profile]);
+
   // allow opening a different invite link in the same tab (hash changes without a reload)
   useEffect(() => {
     const onHashChange = () => {
@@ -1371,6 +1397,29 @@ export default function ChessGame() {
           publish({ t: "left", id: myId, explicit: true });
         } catch {
           /* noop */
+        }
+      }
+      // cleanly close the game we are leaving before joining the new one
+      if (
+        gameIdRef.current &&
+        onlineRef.current &&
+        onlineRef.current.role !== "spec" &&
+        !gameOverRef.current
+      ) {
+        const gid = gameIdRef.current;
+        const meColor = onlineRef.current.role as Color;
+        if (onlineRef.current.status === "connected") {
+          const winner: Color = meColor === "w" ? "b" : "w";
+          setGameResult(gid, {
+            kind: "abandon",
+            winner,
+          } as unknown as FbResult).catch(() => {});
+          applyRating(gid, meColor, {
+            kind: "abandon",
+            winner,
+          } as unknown as FbResult).catch(() => {});
+        } else {
+          deleteGame(gid).catch(() => {});
         }
       }
       clearSession();
@@ -1498,12 +1547,11 @@ export default function ChessGame() {
   }, [publish, showToast]);
   const acceptResign = useCallback(() => {
     const w = (myRoleRef.current === "b" ? "b" : "w") as Color;
-    setScore((s) => ({ ...s, [w]: s[w] + 1 }));
-    resetTo([]);
     publish({ t: "resign-accept", winner: w });
     setResignIncoming(false);
+    finish({ kind: "resign", winner: w });
     showToast(tr(langRef.current, "winByResign"));
-  }, [publish, resetTo, showToast]);
+  }, [publish, finish, showToast]);
   const declineResign = useCallback(() => {
     publish({ t: "resign-decline" });
     setResignIncoming(false);
@@ -1808,6 +1856,9 @@ export default function ChessGame() {
       modalSub = leaverNick
         ? `${leaverNick} ${tr(lang, "leftSuffix")}`
         : tr(lang, "opponentLeft");
+    else if (result.kind === "resign")
+      modalSub =
+        result.winner === "w" ? tr(lang, "whiteWins") : tr(lang, "blackWins");
     else if (result.kind === "stalemate") modalSub = tr(lang, "stalemateSub");
     else
       modalSub =
@@ -1935,6 +1986,39 @@ export default function ChessGame() {
                 }}
               >
                 {tr(lang, "cancelBtn")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* copy link modal */}
+      {inviteLink && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-title" style={{ fontSize: 20 }}>
+              {tr(lang, "shareInvite")}
+            </div>
+            <input
+              className="nick-input"
+              readOnly
+              value={inviteLink}
+              onFocus={(e) => e.currentTarget.select()}
+              style={{ fontSize: 13, textAlign: "left" }}
+            />
+            <div className="modal-btns">
+              <button
+                className="primary"
+                onClick={() => {
+                  const link = inviteLink;
+                  if (navigator.clipboard?.writeText && link) {
+                    navigator.clipboard.writeText(link).catch(() => {});
+                  }
+                  showToast(tr(langRef.current, "linkCopied"));
+                  setInviteLink(null); // popup disappears after copying
+                }}
+              >
+                {tr(lang, "copyLink")}
               </button>
             </div>
           </div>
