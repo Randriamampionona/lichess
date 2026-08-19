@@ -1256,11 +1256,15 @@ export default function ChessGame() {
         setGameResult(gid, {
           kind: "abandon",
           winner,
-        } as unknown as FbResult).catch(() => {});
+        } as unknown as FbResult).catch((e) =>
+          console.error("setGameResult FAILED:", e),
+        );
         applyRating(gid, meColor, {
           kind: "abandon",
           winner,
-        } as unknown as FbResult).catch(() => {});
+        } as unknown as FbResult).catch((e) =>
+          console.error("applyRating FAILED:", e),
+        );
       } else {
         // nobody joined yet → remove the game so the link is dead
         deleteGame(gid).catch(() => {});
@@ -1413,11 +1417,15 @@ export default function ChessGame() {
           setGameResult(gid, {
             kind: "abandon",
             winner,
-          } as unknown as FbResult).catch(() => {});
+          } as unknown as FbResult).catch((e) =>
+            console.error("setGameResult FAILED:", e),
+          );
           applyRating(gid, meColor, {
             kind: "abandon",
             winner,
-          } as unknown as FbResult).catch(() => {});
+          } as unknown as FbResult).catch((e) =>
+            console.error("applyRating FAILED:", e),
+          );
         } else {
           deleteGame(gid).catch(() => {});
         }
@@ -1502,15 +1510,15 @@ export default function ChessGame() {
     )
       return;
     // mark the game finished in Firestore so a revisited link is read-only
-    setGameResult(gameIdRef.current, result as unknown as FbResult).catch(
-      () => {},
+    setGameResult(gameIdRef.current, result as unknown as FbResult).catch((e) =>
+      console.error("setGameResult FAILED:", e),
     );
     if (ratedRef.current)
       applyRating(
         gameIdRef.current,
         online.role,
         result as unknown as FbResult,
-      ).catch(() => {});
+      ).catch((e) => console.error("applyRating FAILED:", e));
   }, [gameOver, result, online]);
 
   const newGame = useCallback(() => {
