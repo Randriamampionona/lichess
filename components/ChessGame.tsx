@@ -828,8 +828,8 @@ export default function ChessGame() {
     lastTickRef.current = performance.now();
     setClock({ w: base, b: base });
     if (
-      onlineRef.current?.role === "w" &&
-      onlineRef.current.status === "connected"
+      rosterRef.current.white.id === myId &&
+      onlineRef.current?.status === "connected"
     )
       publish({ t: "tc", tcId });
   }, [tcId, publish]);
@@ -970,6 +970,9 @@ export default function ChessGame() {
           }
         } else if (msg.t === "state") {
           const iAmHost = rosterRef.current.white.id === myId;
+          // adopt the host time control immediately (even before any move)
+          if (!iAmHost && msg.tcId && msg.tcId !== tcIdRef.current)
+            setTcId(msg.tcId);
           if (!iAmHost && msg.score) setScore(msg.score);
           let adopt = msg.moves.length > plyRef.current;
           if (!adopt && !iAmHost && msg.moves.length === plyRef.current) {
