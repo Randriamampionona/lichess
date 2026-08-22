@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Color, PieceType, GLYPH } from "@/lib/engine";
 import { Lang, tr, TKey } from "@/lib/i18n";
 
@@ -19,7 +20,17 @@ export type OnlineState = {
   blackNick: string | null;
 } | null;
 
-export type TcId = "none" | "3+2" | "5+0" | "10+0";
+export type TcId =
+  | "none"
+  | "1+0"
+  | "1+1"
+  | "2+1"
+  | "3+0"
+  | "3+2"
+  | "5+0"
+  | "10+0"
+  | "15+10"
+  | "30+0";
 type Rematch = "none" | "sent" | "received";
 
 interface SidePanelProps {
@@ -65,11 +76,19 @@ interface SidePanelProps {
   takebackPending: boolean;
 }
 
-const TC_LIST: { id: TcId; label: string }[] = [
+// quick options always shown
+const TC_QUICK: { id: TcId; label: string }[] = [
   { id: "none", label: "∞" },
   { id: "3+2", label: "3+2" },
   { id: "5+0", label: "5+0" },
   { id: "10+0", label: "10+0" },
+];
+
+// full catalog, chess.com-style groups (shown under "More")
+export const TC_GROUPS: { group: string; items: { id: TcId; label: string }[] }[] = [
+  { group: "Bullet", items: [ { id: "1+0", label: "1+0" }, { id: "1+1", label: "1+1" }, { id: "2+1", label: "2+1" } ] },
+  { group: "Blitz", items: [ { id: "3+0", label: "3+0" }, { id: "3+2", label: "3+2" }, { id: "5+0", label: "5+0" } ] },
+  { group: "Rapid", items: [ { id: "10+0", label: "10+0" }, { id: "15+10", label: "15+10" }, { id: "30+0", label: "30+0" } ] },
 ];
 
 function toggleFullscreen() {
@@ -84,6 +103,7 @@ export default function SidePanel(p: SidePanelProps) {
   const isSpec = online?.role === "spec";
   const isPlayer = !!online && online.role !== "spec";
   const tcDisabled = p.settingsLocked || (!!online && online.role !== "w");
+  const [tcMoreOpen, setTcMoreOpen] = useState(false);
 
   let title: string;
   let sub: string;
@@ -275,7 +295,7 @@ export default function SidePanel(p: SidePanelProps) {
       <div className="row">
         <span className="lbl">{t("time")}</span>
         <div className="seg">
-          {TC_LIST.map((tc) => (
+          {TC_QUICK.map((tc) => (
             <button
               key={tc.id}
               className={p.tcId === tc.id ? "on" : ""}
@@ -285,8 +305,37 @@ export default function SidePanel(p: SidePanelProps) {
               {tc.label}
             </button>
           ))}
+          <button
+            className={tcMoreOpen ? "on" : ""}
+            disabled={tcDisabled}
+            onClick={() => setTcMoreOpen((v) => !v)}
+            title="More time controls"
+          >
+            {tcMoreOpen ? "–" : "More"}
+          </button>
         </div>
       </div>
+      {tcMoreOpen && (
+        <div className="tc-more">
+          {TC_GROUPS.map((grp) => (
+            <div key={grp.group} className="tc-grp">
+              <span className="tc-grp-name">{grp.group}</span>
+              <div className="seg">
+                {grp.items.map((tc) => (
+                  <button
+                    key={tc.id}
+                    className={p.tcId === tc.id ? "on" : ""}
+                    disabled={tcDisabled}
+                    onClick={() => p.onTcId(tc.id)}
+                  >
+                    {tc.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="status">
         <div className={"turn-dot " + p.turn} />

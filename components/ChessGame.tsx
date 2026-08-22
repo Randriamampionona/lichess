@@ -21,6 +21,7 @@ import SidePanel, {
   OnlineState,
   Role,
   TcId,
+  TC_GROUPS,
 } from "@/components/SidePanel";
 import Chat, { ChatMsg, QuickSend } from "@/components/Chat";
 import Navbar from "@/components/Navbar";
@@ -56,9 +57,15 @@ const PEER_LEAVE = 60000; // peer silent this long (while we're awake) → decla
 
 const TCS: Record<TcId, { base: number; inc: number } | null> = {
   none: null,
+  "1+0": { base: 60000, inc: 0 },
+  "1+1": { base: 60000, inc: 1000 },
+  "2+1": { base: 120000, inc: 1000 },
+  "3+0": { base: 180000, inc: 0 },
   "3+2": { base: 180000, inc: 2000 },
   "5+0": { base: 300000, inc: 0 },
   "10+0": { base: 600000, inc: 0 },
+  "15+10": { base: 900000, inc: 10000 },
+  "30+0": { base: 1800000, inc: 0 },
 };
 
 const ADJ = [
@@ -384,7 +391,9 @@ export default function ChessGame() {
   } | null>(null);
   const [nickInput, setNickInput] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [nickColor, setNickColor] = useState<"w" | "b" | "random">("w");
+  const [nickColor, setNickColor] = useState<"w" | "b" | "random">(
+    "random",
+  );
   const [editingNick, setEditingNick] = useState(false);
   const [nickDraft, setNickDraft] = useState("");
   const [resignIncoming, setResignIncoming] = useState(false);
@@ -1981,6 +1990,25 @@ export default function ChessGame() {
                 <option value="w">{tr(lang, "playWhite")}</option>
                 <option value="b">{tr(lang, "playBlack")}</option>
                 <option value="random">{tr(lang, "playRandom")}</option>
+              </select>
+            )}
+            {nickPrompt.isHost && (
+              <select
+                className="nick-input"
+                value={tcId}
+                onChange={(e) => setTcId(e.target.value as TcId)}
+                style={{ cursor: "pointer" }}
+              >
+                <option value="none">∞ {tr(lang, "time")}</option>
+                {TC_GROUPS.map((grp) => (
+                  <optgroup key={grp.group} label={grp.group}>
+                    {grp.items.map((tc) => (
+                      <option key={tc.id} value={tc.id}>
+                        {tc.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             )}
             <div className="modal-btns">
